@@ -1,0 +1,24 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Main window: only what Crew needs. Add a line here for every new command or plugin, nothing more.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "deep-link:default",
+    "notification:default",
+    "store:default",
+    "opener:default",
+    "window-state:default",
+    "global-shortcut:default",
+    "autostart:default",
+    "log:default",
+    "updater:default",
+    "allow-auth-start-login",
+    "allow-auth-get-access-token",
+    "allow-auth-logout",
+    "allow-notify",
+    "allow-set-tray-badge",
+    "allow-app-version"
+  ]
+}

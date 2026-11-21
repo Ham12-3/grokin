@@ -1,0 +1,45 @@
+name: crew
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: crew
+      POSTGRES_PASSWORD: crew
+      POSTGRES_DB: crew
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U crew"]
+      interval: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: crew
+      MINIO_ROOT_PASSWORD: crewcrewcrew
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - miniodata:/data
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+
+# The per-user cloud computers are NOT defined here.
+# The DockerProvider starts one container per user from the crew-computer image:
+#   docker build -t crew-computer:dev -f infra/computer/Dockerfile infra/computer
