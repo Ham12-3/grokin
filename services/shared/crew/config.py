@@ -23,10 +23,23 @@ class Settings(BaseSettings):
     # App
     crew_env: Literal["dev", "test", "prod"] = "dev"
     api_base_url: str = "http://localhost:8000"
+    api_prefix: str = "/api/v1"
     desktop_deep_link: str = "crew://auth"
     jwt_secret: str = Field(default="", repr=False)
     access_token_minutes: int = 15
     refresh_token_days: int = 30
+    magic_link_minutes: int = 15
+    auth_code_seconds: int = 60
+    oauth_state_minutes: int = 10
+    email_login_max_per_window: int = 5
+    http_timeout_seconds: float = 10.0
+    # Origins of the desktop webview (Vite in dev, Tauri's own scheme in builds).
+    cors_origins: list[str] = [
+        "http://localhost:1420",
+        "tauri://localhost",
+        "http://tauri.localhost",
+        "https://tauri.localhost",
+    ]
 
     # Database / Redis / storage
     database_url: str = "postgresql+asyncpg://crew:crew@localhost:5432/crew"
@@ -50,6 +63,9 @@ class Settings(BaseSettings):
     # Auth providers
     google_client_id: str = ""
     google_client_secret: str = Field(default="", repr=False)
+    google_auth_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105
+    google_userinfo_url: str = "https://openidconnect.googleapis.com/v1/userinfo"
     email_from: str = "Crew <no-reply@example.com>"
     smtp_url: str = Field(default="", repr=False)
 

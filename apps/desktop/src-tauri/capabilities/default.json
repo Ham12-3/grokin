@@ -3,5 +3,20 @@
   "identifier": "default",
   "description": "Main window: only what Crew needs. Add a line here for every new command or plugin, nothing more.",
   "windows": ["main"],
-  "permissions": ["core:default", "opener:default"]
+  "permissions": [
+    "core:default",
+    "deep-link:default",
+    "notification:default",
+    "store:default",
+    "opener:default",
+    "window-state:default",
+    "autostart:default",
+    "log:default",
+    "allow-auth-start-login",
+    "allow-auth-get-tokens",
+    "allow-auth-get-access-token",
+    "allow-auth-logout",
+    "allow-api-base-url",
+    "allow-app-version"
+  ]
 }

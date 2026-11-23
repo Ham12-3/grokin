@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-auth-get-tokens"
+description = "Enables the auth_get_tokens command without any pre-configured scope."
+commands.allow = ["auth_get_tokens"]
+
+[[permission]]
+identifier = "deny-auth-get-tokens"
+description = "Denies the auth_get_tokens command without any pre-configured scope."
+commands.deny = ["auth_get_tokens"]

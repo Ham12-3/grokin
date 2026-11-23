@@ -23,7 +23,11 @@ services:
     volumes:
       - redisdata:/data
 
+  # MinIO is only needed from phase 9 (Library). Its image is no longer pullable from
+  # Docker Hub, so it sits behind a profile and does not block `make up`.
+  # Start it with: docker compose -f infra/docker-compose.yml --profile storage up -d
   minio:
+    profiles: ["storage"]
     image: minio/minio:latest
     command: server /data --console-address ":9001"
     environment:

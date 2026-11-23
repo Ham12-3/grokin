@@ -12,7 +12,7 @@ from crew.config import get_settings
 from crew.db import Base
 
 config = context.config
-if config.config_file_name is not None:
+if config.config_file_name is not None and not config.attributes.get("skip_logging_config"):
     fileConfig(config.config_file_name)
 
 target_metadata = Base.metadata
