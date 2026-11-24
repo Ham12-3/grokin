@@ -143,10 +143,189 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/bots": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Bots */
+        get: operations["list_bots_api_v1_bots_get"];
+        put?: never;
+        /** Create Bot */
+        post: operations["create_bot_api_v1_bots_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bots/{bot_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bot */
+        get: operations["get_bot_api_v1_bots__bot_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Bot */
+        delete: operations["delete_bot_api_v1_bots__bot_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Bot */
+        patch: operations["update_bot_api_v1_bots__bot_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/bots/{bot_id}/primary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Make Primary */
+        post: operations["make_primary_api_v1_bots__bot_id__primary_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chats": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Chats */
+        get: operations["list_chats_api_v1_chats_get"];
+        put?: never;
+        /** Open Chat */
+        post: operations["open_chat_api_v1_chats_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chats/{chat_id}/messages": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Messages */
+        get: operations["list_messages_api_v1_chats__chat_id__messages_get"];
+        put?: never;
+        /** Send Message */
+        post: operations["send_message_api_v1_chats__chat_id__messages_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
     schemas: {
+        /** BotCreate */
+        BotCreate: {
+            /** Name */
+            name: string;
+            /** Avatar */
+            avatar?: string | null;
+            /** Job */
+            job: string;
+            /**
+             * Instructions
+             * @default
+             */
+            instructions: string;
+            /**
+             * Approval Mode
+             * @default ask_risky
+             * @enum {string}
+             */
+            approval_mode: "always_ask" | "ask_risky" | "never_ask";
+        };
+        /** BotOut */
+        BotOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /** Avatar */
+            avatar: string | null;
+            /** Job */
+            job: string;
+            /** Instructions */
+            instructions: string;
+            /**
+             * Approval Mode
+             * @enum {string}
+             */
+            approval_mode: "always_ask" | "ask_risky" | "never_ask";
+            /** Is Primary */
+            is_primary: boolean;
+            /** Direct Chat Id */
+            direct_chat_id: string | null;
+            /** Working */
+            working: boolean;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** BotUpdate */
+        BotUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Avatar */
+            avatar?: string | null;
+            /** Job */
+            job?: string | null;
+            /** Instructions */
+            instructions?: string | null;
+            /** Approval Mode */
+            approval_mode?: ("always_ask" | "ask_risky" | "never_ask") | null;
+        };
+        /** ChatCreate */
+        ChatCreate: {
+            /** Bot Ids */
+            bot_ids: string[];
+        };
+        /** ChatOut */
+        ChatOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "direct" | "group";
+            /** Title */
+            title: string | null;
+            /** Bot Ids */
+            bot_ids: string[];
+            /** Last Message At */
+            last_message_at: string | null;
+        };
         /** EmailStartRequest */
         EmailStartRequest: {
             /**
@@ -224,11 +403,70 @@ export interface components {
             timezone: string;
             /** Daily Token Budget */
             daily_token_budget: number;
+            /** Input Tokens Today */
+            input_tokens_today: number;
+            /** Output Tokens Today */
+            output_tokens_today: number;
+        };
+        /** MessageOut */
+        MessageOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Chat Id
+             * Format: uuid
+             */
+            chat_id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "bot" | "system";
+            /** Bot Id */
+            bot_id: string | null;
+            /** Content */
+            content: string;
+            /** Run Id */
+            run_id: string | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /**
+         * MessagePage
+         * @description Oldest first. `has_more` means older messages exist before `items[0]`.
+         */
+        MessagePage: {
+            /** Items */
+            items: components["schemas"]["MessageOut"][];
+            /** Has More */
+            has_more: boolean;
+            /** Active Run Id */
+            active_run_id: string | null;
         };
         /** RefreshRequest */
         RefreshRequest: {
             /** Refresh Token */
             refresh_token: string;
+        };
+        /** SendMessageRequest */
+        SendMessageRequest: {
+            /** Content */
+            content: string;
+        };
+        /** SendMessageResponse */
+        SendMessageResponse: {
+            message: components["schemas"]["MessageOut"];
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -513,6 +751,307 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["MeResponse"];
+                };
+            };
+        };
+    };
+    list_bots_api_v1_bots_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotOut"][];
+                };
+            };
+        };
+    };
+    create_bot_api_v1_bots_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bot_api_v1_bots__bot_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_bot_api_v1_bots__bot_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_bot_api_v1_bots__bot_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    make_primary_api_v1_bots__bot_id__primary_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_chats_api_v1_chats_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatOut"][];
+                };
+            };
+        };
+    };
+    open_chat_api_v1_chats_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ChatCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ChatOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_messages_api_v1_chats__chat_id__messages_get: {
+        parameters: {
+            query?: {
+                before?: string | null;
+                limit?: number;
+            };
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessagePage"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    send_message_api_v1_chats__chat_id__messages_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SendMessageRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SendMessageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
                 };
             };
         };

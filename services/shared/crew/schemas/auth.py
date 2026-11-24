@@ -54,3 +54,5 @@ class TokenResponse(BaseModel):
 
 class MeResponse(UserOut):
     daily_token_budget: int
+    input_tokens_today: int
+    output_tokens_today: int

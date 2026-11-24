@@ -4,6 +4,7 @@
  */
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 export type Provider = "google" | "email";
 
@@ -56,6 +57,11 @@ export function apiBaseUrl(): Promise<string> {
 
 export function appVersion(): Promise<string> {
   return invoke("app_version");
+}
+
+/** Opens a web link in the system browser. Anything that is not http(s) is ignored. */
+export async function openExternal(url: string): Promise<void> {
+  if (/^https?:\/\//i.test(url)) await openUrl(url);
 }
 
 export function onAuthChanged(callback: (signedIn: boolean) => void): Promise<UnlistenFn> {

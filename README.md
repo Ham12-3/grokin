@@ -22,3 +22,6 @@ Health check: `curl localhost:8000/api/v1/health`
 
 Sign in during development: enter your email in the app, then open the link the API prints
 in its log (the line starting `auth.magic_link`).
+
+Chatting needs three things running: `make api`, `make worker` and `make desktop`. Without an
+Anthropic API key, set `LLM_PROVIDER=fake` in `.env` to try the app with a scripted model.

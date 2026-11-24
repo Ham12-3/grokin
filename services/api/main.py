@@ -4,6 +4,8 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 import httpx
+from arq import create_pool
+from arq.connections import RedisSettings
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -11,7 +13,8 @@ from fastapi.responses import JSONResponse
 from redis.asyncio import Redis
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from api.routers import auth
+from api import ws
+from api.routers import auth, bots, chats
 from crew import __version__
 from crew.auth.mailer import create_mailer
 from crew.auth.tokens import require_jwt_secret
@@ -34,6 +37,9 @@ async def health(request: Request) -> HealthResponse:
 
 
 router.include_router(auth.router)
+router.include_router(bots.router)
+router.include_router(chats.router)
+router.include_router(ws.router)
 
 
 def _error(status_code: int, code: str, message: str) -> JSONResponse:
@@ -69,9 +75,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.redis = Redis.from_url(settings.redis_url, decode_responses=True)
     app.state.http = httpx.AsyncClient(timeout=settings.http_timeout_seconds)
     app.state.mailer = create_mailer(settings)
+    app.state.queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         yield
     finally:
+        await app.state.queue.aclose()
         await app.state.http.aclose()
         await app.state.redis.aclose()
         await app.state.engine.dispose()

@@ -1,8 +1,8 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
+import { Shell } from "@/app/Shell";
 import { SignInScreen } from "@/features/auth/SignInScreen";
 import { startAuthSync, useAuthStore } from "@/features/auth/auth-store";
-import { HomeScreen } from "@/features/home/HomeScreen";
 
 function Screens() {
   const status = useAuthStore((state) => state.status);
@@ -10,7 +10,7 @@ function Screens() {
   if (status === "loading") {
     return <main className="bg-background h-screen" aria-busy="true" />;
   }
-  return status === "signedIn" ? <HomeScreen /> : <SignInScreen />;
+  return status === "signedIn" ? <Shell /> : <SignInScreen />;
 }
 
 function App() {

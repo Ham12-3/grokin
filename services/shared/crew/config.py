@@ -50,11 +50,21 @@ class Settings(BaseSettings):
     s3_secret_key: str = Field(default="", repr=False)
 
     # AI
+    llm_provider: Literal["anthropic", "fake"] = "anthropic"
+    fake_llm_delay_seconds: float = 0.03
     anthropic_api_key: str = Field(default="", repr=False)
     crew_model: str = ""
     crew_small_model: str = ""
+    crew_max_output_tokens: int = 16_000
     crew_max_steps: int = 40
     crew_daily_token_budget: int = 2_000_000
+
+    # Limits
+    max_bots_per_user: int = 50
+    chat_history_messages: int = 40
+    run_timeout_seconds: int = 600
+    partial_save_seconds: float = 1.0
+    ws_max_subscriptions: int = 50
 
     # Web search
     search_provider: str = "brave"

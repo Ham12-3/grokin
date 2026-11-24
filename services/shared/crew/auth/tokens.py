@@ -57,6 +57,11 @@ def create_access_token(user_id: uuid.UUID, settings: Settings) -> tuple[str, in
 
 
 def decode_access_token(token: str, settings: Settings) -> uuid.UUID:
+    return decode_access_claims(token, settings)[0]
+
+
+def decode_access_claims(token: str, settings: Settings) -> tuple[uuid.UUID, float]:
+    """Returns the user id and the expiry time (Unix seconds)."""
     try:
         claims = jwt.decode(
             token,
@@ -66,7 +71,7 @@ def decode_access_token(token: str, settings: Settings) -> uuid.UUID:
         )
         if claims["typ"] != "access":
             raise unauthorized("invalid_token", "Invalid access token.")
-        return uuid.UUID(claims["sub"])
+        return uuid.UUID(claims["sub"]), float(claims["exp"])
     except jwt.ExpiredSignatureError as exc:
         raise unauthorized("token_expired", "Access token expired.") from exc
     except (jwt.InvalidTokenError, ValueError) as exc:
@@ -77,6 +82,7 @@ __all__ = [
     "REFRESH_TOKEN_BYTES",
     "AppError",
     "create_access_token",
+    "decode_access_claims",
     "decode_access_token",
     "new_token",
     "pkce_challenge",

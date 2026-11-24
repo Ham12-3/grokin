@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crew.auth.mailer import Mailer
 from crew.auth.tokens import decode_access_token
+from crew.chats.service import JobQueue
 from crew.config import Settings
 from crew.errors import unauthorized
 from crew.models import User
@@ -33,6 +34,11 @@ def get_http(request: Request) -> httpx.AsyncClient:
     return http
 
 
+def get_queue(request: Request) -> JobQueue:
+    queue: JobQueue = request.app.state.queue
+    return queue
+
+
 def get_mailer(request: Request) -> Mailer:
     mailer: Mailer = request.app.state.mailer
     return mailer
@@ -48,6 +54,7 @@ SettingsDep = Annotated[Settings, Depends(get_settings_dep)]
 RedisDep = Annotated[Redis, Depends(get_redis)]
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]
 MailerDep = Annotated[Mailer, Depends(get_mailer)]
+QueueDep = Annotated[JobQueue, Depends(get_queue)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 
 

@@ -4,7 +4,7 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 1 (desktop shell + sign-in): built, waiting for your hands-on check.
+Phase 2 (Bots + streaming chat): built, waiting for your hands-on check.
 
 ## Done
 
@@ -61,11 +61,52 @@ Desktop (React)
 - Sign-in screen (email + Google), "Check your email" state, signed-in placeholder home with
   the name from `/me` and Sign out.
 
+### Phase 2: Bots + streaming chat
+
+Backend
+
+- Migration `0003`: `bots`, `chats`, `chat_members`, `messages`, `runs`, `usage_daily`.
+- Bots: create, edit, delete, Primary Bot (one per user; the first Bot becomes Primary;
+  deleting the Primary promotes the oldest remaining Bot). Limit of 50 (`MAX_BOTS_PER_USER`).
+  Creating a Bot creates its direct chat; deleting a Bot deletes that chat and its messages.
+- Chats: `GET /chats`, `POST /chats` (one Bot only for now), `GET /chats/{id}/messages` with
+  `before` + `limit` paging, `POST /chats/{id}/messages` which saves the message, creates a
+  `queued` run, enqueues the ARQ job and returns `{message, run_id}`.
+- Worker job `run_agent`: builds the system prompt from the Bot, streams from Claude (model
+  from `CREW_MODEL`), publishes `message.delta` to Redis, saves the message, records tokens in
+  `runs` and `usage_daily`. A failed run always ends as `failed` with a safe message.
+- LLM behind one interface (`crew/llm`): `AnthropicLLM` and a scripted `FakeLLM`.
+  `LLM_PROVIDER=fake` runs the whole app without an API key (refused in prod).
+- WebSocket `/api/v1/ws`: auth on connect, subscribe/unsubscribe with ownership checks,
+  forwards Redis events, ping/pong, closes when the access token expires.
+- `/me` now returns `input_tokens_today` and `output_tokens_today`.
+
+Desktop
+
+- Layout: sidebar (Bots, Primary star, status dot, + menu), chat, collapsible details pane
+  with six tabs (only Settings has content).
+- New Bot dialog and Bot settings tab (edit, Make Primary, delete with confirm).
+- Chat: paged history ("Load earlier messages", also loads when you scroll to the top),
+  streaming reply, composer (Enter sends, Shift+Enter new line), sanitized markdown, links
+  open in the system browser.
+- `src/lib/ws.ts`: one WebSocket, backoff 1s to 30s, re-subscribes and refetches after a
+  reconnect; "Reconnecting..." banner; Zustand store for live text.
+
 ## Next
 
-- Phase 2: Bots + streaming chat (`prompts/phase-02-bots-chat.md`).
+- Phase 3: agent loop + tools (`prompts/phase-03-agent-loop.md`).
 
 ## Shortcuts taken (to revisit)
+
+- Claude itself has not been called yet: no `ANTHROPIC_API_KEY` was set, so streaming was
+  verified with `FakeLLM` only. First real run needs a check of `crew/llm/anthropic_llm.py`.
+- Server-side refusal fallbacks (the Anthropic `fallbacks` beta) are not enabled; a refused
+  request shows a short "can't help with that" reply. Decide when a key is available.
+- No daily budget enforcement yet (usage is recorded and shown); it arrives with phase 3.
+- The details pane tabs other than Settings are placeholders.
+- Scrolling up to load older messages was not exercised in the running app (the paging API
+  and the button are tested).
+- The selected Bot is not remembered across restarts; the Primary Bot opens.
 
 - shadcn/ui defaults (neutral colours, Geist font). `docs/10-ui-spec.md` asks for Inter and one
   accent colour; apply with the real layout in phase 2.
@@ -81,6 +122,11 @@ Desktop (React)
   `CREW_REQUIRE_SERVICES=1` so they fail there instead.
 
 ## Known issues
+
+- After an outage the app can take up to about 30 seconds to reconnect once the API is back,
+  because of the reconnect backoff in the spec.
+- A run whose worker dies stays `running` until `RUN_TIMEOUT_SECONDS` (10 minutes); the chat
+  is blocked for that long.
 
 - MinIO: `minio/minio` can no longer be pulled from Docker Hub (or quay.io), so the template's
   compose file made `make up` fail. MinIO is now behind the `storage` profile. Pick an object
@@ -108,3 +154,10 @@ Desktop (React)
 | 2026-11-21 | Tests use a separate `crew_test` database and Redis db 15 | Tests truncate tables; dev data must be safe. |
 | 2026-11-21 | Rust crates pinned to keyring 3, reqwest 0.12, rand 0.8 | Well-known APIs; newer majors changed feature names. |
 | 2026-11-21 | `auth_get_tokens` and `api_base_url` commands added | `docs/04` lists the first; the second keeps the API URL in one place (`CREW_API_URL`). |
+| 2026-11-24 | WebSocket token goes in the `Sec-WebSocket-Protocol` header, not `?token=` | Query strings land in access logs; flagged at kickoff. Still checked on connect. |
+| 2026-11-24 | Each `message.delta` carries its character `offset` | Lets a reconnecting client detect missed text and refetch instead of showing gaps. |
+| 2026-11-24 | The bot message row is created when streaming starts and saved about once a second | A refetch mid-stream then shows the partial reply. |
+| 2026-11-24 | One reply at a time per chat (`409 bot_busy`) | Two runs in one chat would interleave. |
+| 2026-11-24 | `messages.bot_id` and `messages.run_id` use `ON DELETE SET NULL` | The spec left them without a delete rule, which would block deleting a Bot. |
+| 2026-11-24 | `.env.example` defaults: `CREW_MODEL=claude-opus-5-5`, `CREW_SMALL_MODEL=claude-haiku-5-5` | Current models; change `CREW_MODEL` to trade cost for capability. |
+| 2026-11-24 | `LLM_PROVIDER=fake` dev mode | Lets the app and UI be tried and tested without spending tokens. |

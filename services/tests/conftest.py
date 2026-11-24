@@ -14,12 +14,18 @@ from pathlib import Path
 import asyncpg
 import httpx
 import pytest
+import uvicorn
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 from redis.asyncio import Redis
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker, create_async_engine
+from sqlalchemy.ext.asyncio import (
+    AsyncEngine,
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
 from sqlalchemy.pool import NullPool
 
 _DEV_DB_URL = os.environ.get("DATABASE_URL", "postgresql+asyncpg://crew:crew@localhost:5432/crew")
@@ -127,6 +133,17 @@ class GoogleStub:
         return httpx.Response(200, json=self.userinfo)
 
 
+class RecordingQueue:
+    """Stands in for ARQ: remembers the jobs so tests can run them by hand."""
+
+    def __init__(self) -> None:
+        self.jobs: list[tuple[str, tuple[object, ...]]] = []
+
+    async def enqueue_job(self, function: str, *args: object) -> object:
+        self.jobs.append((function, args))
+        return None
+
+
 @dataclass
 class Ctx:
     app: FastAPI
@@ -136,6 +153,8 @@ class Ctx:
     redis: Redis
     mailer: RecordingMailer
     google: GoogleStub
+    queue: RecordingQueue
+    session_factory: async_sessionmaker[AsyncSession]
 
 
 @pytest.fixture
@@ -147,7 +166,12 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     await redis.flushdb()
     async with engine.begin() as conn:
-        await conn.execute(text("TRUNCATE users, refresh_tokens, audit_log CASCADE"))
+        await conn.execute(
+            text(
+                "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
+                "messages, runs, usage_daily CASCADE"
+            )
+        )
 
     google = GoogleStub()
     http = httpx.AsyncClient(transport=httpx.MockTransport(google.handler))
@@ -156,15 +180,32 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     app = create_app()
     app.state.settings = settings
     app.state.engine = engine
-    app.state.session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    session_factory = async_sessionmaker(engine, expire_on_commit=False)
+    queue = RecordingQueue()
+    app.state.session_factory = session_factory
+    app.state.queue = queue
     app.state.redis = redis
     app.state.http = http
     app.state.mailer = mailer
 
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-        yield Ctx(app, client, settings, engine, redis, mailer, google)
+        yield Ctx(app, client, settings, engine, redis, mailer, google, queue, session_factory)
 
     await http.aclose()
     await redis.flushdb()
     await redis.aclose()
     await engine.dispose()
+
+
+@pytest.fixture
+async def live_ws(ctx: Ctx) -> AsyncIterator[str]:
+    """Serves the app on a real local port for WebSocket tests. Yields the ws:// URL."""
+    config = uvicorn.Config(ctx.app, host="127.0.0.1", port=0, lifespan="off", log_level="warning")
+    server = uvicorn.Server(config)
+    task = asyncio.create_task(server.serve())
+    while not server.started:  # noqa: ASYNC110
+        await asyncio.sleep(0.01)
+    port = server.servers[0].sockets[0].getsockname()[1]
+    yield f"ws://127.0.0.1:{port}/api/v1/ws"
+    server.should_exit = True
+    await task

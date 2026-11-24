@@ -19,6 +19,7 @@ from crew.schemas.auth import (
     TokenResponse,
     UserOut,
 )
+from crew.usage import usage_today
 
 router = APIRouter(tags=["auth"])
 
@@ -149,5 +150,11 @@ async def logout(body: LogoutRequest, session: SessionDep) -> Response:
 
 
 @router.get("/me", response_model=MeResponse)
-async def me(user: CurrentUser) -> MeResponse:
-    return MeResponse.model_validate(user)
+async def me(user: CurrentUser, session: SessionDep) -> MeResponse:
+    today = await usage_today(session, user.id)
+    return MeResponse(
+        **UserOut.model_validate(user).model_dump(),
+        daily_token_budget=user.daily_token_budget,
+        input_tokens_today=today.input_tokens,
+        output_tokens_today=today.output_tokens,
+    )
