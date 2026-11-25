@@ -36,6 +36,16 @@ test("nothing is sent while the Bot is replying or when the box is empty", () =>
   expect(onSend).not.toHaveBeenCalled();
 });
 
+test("while a run can be stopped, Stop replaces Send", () => {
+  const onStop = vi.fn();
+  const onSend = vi.fn();
+  render(<Composer botName="Inbox Bot" busy onSend={onSend} onStop={onStop} />);
+  expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Stop" }));
+  expect(onStop).toHaveBeenCalledTimes(1);
+  expect(onSend).not.toHaveBeenCalled();
+});
+
 test("markdown renders formatting", () => {
   render(<Markdown text={"**bold** and `code`\n\n- one\n- two"} />);
   expect(screen.getByText("bold").tagName).toBe("STRONG");

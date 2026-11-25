@@ -1,7 +1,5 @@
 """The worker's agent run with a FakeLLM: streaming, saving, usage, failures."""
 
-import asyncio
-import json
 from typing import Any
 
 from sqlalchemy import text
@@ -12,33 +10,7 @@ from crew.llm.base import LLMError
 from crew.llm.fake import FakeLLM
 from crew.models import Bot
 from tests.conftest import Ctx
-from tests.helpers import API, create_bot, run_worker, send, sign_in
-
-
-class Listener:
-    """Collects the events published on some Redis channels."""
-
-    def __init__(self, ctx: Ctx, *channels: str) -> None:
-        self._pubsub = ctx.redis.pubsub()
-        self._channels = channels
-        self.events: list[dict[str, Any]] = []
-
-    async def __aenter__(self) -> "Listener":
-        await self._pubsub.subscribe(*self._channels)
-        return self
-
-    async def __aexit__(self, *_: object) -> None:
-        await asyncio.sleep(0.05)
-        while True:
-            item = await self._pubsub.get_message(timeout=0.1)
-            if item is None:
-                break
-            if item["type"] == "message":
-                self.events.append(json.loads(item["data"]))
-        await self._pubsub.aclose()  # type: ignore[no-untyped-call]
-
-    def of(self, event_type: str) -> list[dict[str, Any]]:
-        return [event for event in self.events if event["type"] == event_type]
+from tests.helpers import API, Listener, create_bot, run_worker, send, sign_in
 
 
 async def _setup(ctx: Ctx) -> tuple[dict[str, str], dict[str, Any], str]:
@@ -113,10 +85,10 @@ async def test_llm_gets_the_bot_prompt_and_the_chat_history(ctx: Ctx) -> None:
     llm = FakeLLM(["Sam"])
     await run_worker(ctx, second["run_id"], llm)
 
-    system, history = llm.calls[0]
+    system, history = llm.calls[0]["system"], llm.calls[0]["messages"]
     assert "You are Inbox Bot, a teammate in Crew. Your job: Sorts my inbox." in system
     assert "Be brief." in system
-    assert [(turn.role, turn.content) for turn in history] == [
+    assert [(turn["role"], turn["content"]) for turn in history] == [
         ("user", "My name is Sam"),
         ("assistant", "Hi Sam"),
         ("user", "What is my name?"),
@@ -146,7 +118,9 @@ async def test_failure_before_any_text_removes_the_placeholder(ctx: Ctx) -> None
     again = await send(ctx, me, chat_id, "are you there?")
     retry = FakeLLM(["yes"])
     assert await run_worker(ctx, again["run_id"], retry) == "completed"
-    assert [(t.role, t.content) for t in retry.calls[0][1]] == [("user", "hello\n\nare you there?")]
+    assert [(t["role"], t["content"]) for t in retry.calls[0]["messages"]] == [
+        ("user", "hello\n\nare you there?")
+    ]
 
 
 async def test_failure_mid_stream_keeps_the_partial_text(ctx: Ctx) -> None:
@@ -198,4 +172,4 @@ def test_system_prompt_shape() -> None:
     assert prompt.startswith("You are Research Bot, a teammate in Crew. Your job: Finds facts.")
     assert "Cite sources." in prompt
     assert "<untrusted>" in prompt
-    assert "no tools yet" in prompt
+    assert "step by step with your tools" in prompt

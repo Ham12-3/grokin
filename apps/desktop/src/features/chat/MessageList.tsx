@@ -1,22 +1,26 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { Markdown } from "./Markdown";
-import type { Message } from "./api";
+import { RunDetails } from "./RunDetails";
+import { ToolSteps } from "./ToolSteps";
+import type { Message, ToolCall } from "./api";
 import { Button } from "@/components/ui/button";
 import type { Bot } from "@/features/bots/api";
 import { useLiveStore } from "@/features/realtime/live";
 import { cn } from "@/lib/utils";
 
 const NEAR_BOTTOM_PX = 80;
+const NO_STEPS: ToolCall[] = [];
 
 interface MessageListProps {
   bot: Bot;
   messages: Message[];
+  toolCalls: Record<string, ToolCall[]>;
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
 }
 
-function Bubble({ bot, message }: { bot: Bot; message: Message }) {
+function Bubble({ bot, message, steps }: { bot: Bot; message: Message; steps: ToolCall[] }) {
   const live = useLiveStore((state) => state.streaming[message.id]);
   const streaming = live !== undefined;
   const text = live ?? message.content;
@@ -35,8 +39,9 @@ function Bubble({ bot, message }: { bot: Bot; message: Message }) {
       <span aria-hidden className="mt-1 text-lg">
         {bot.avatar ?? "🤖"}
       </span>
-      <div className="bg-muted max-w-[75%] rounded-2xl px-3 py-2" aria-busy={streaming}>
-        <Markdown text={text} />
+      <div className="bg-muted max-w-[75%] space-y-2 rounded-2xl px-3 py-2" aria-busy={streaming}>
+        {steps.length > 0 && <ToolSteps steps={steps} />}
+        {text && <Markdown text={text} />}
         {streaming && (
           <span
             aria-hidden
@@ -46,6 +51,7 @@ function Bubble({ bot, message }: { bot: Bot; message: Message }) {
             )}
           />
         )}
+        {!streaming && message.run_id && <RunDetails runId={message.run_id} steps={steps} />}
       </div>
     </div>
   );
@@ -54,6 +60,7 @@ function Bubble({ bot, message }: { bot: Bot; message: Message }) {
 export function MessageList({
   bot,
   messages,
+  toolCalls,
   hasOlder,
   loadingOlder,
   onLoadOlder,
@@ -127,7 +134,12 @@ export function MessageList({
         </p>
       )}
       {messages.map((message) => (
-        <Bubble key={message.id} bot={bot} message={message} />
+        <Bubble
+          key={message.id}
+          bot={bot}
+          message={message}
+          steps={(message.run_id && toolCalls[message.run_id]) || NO_STEPS}
+        />
       ))}
     </div>
   );

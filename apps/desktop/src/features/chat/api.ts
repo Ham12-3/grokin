@@ -1,6 +1,7 @@
 import {
   useInfiniteQuery,
   useMutation,
+  useQuery,
   useQueryClient,
   type InfiniteData,
   type QueryClient,
@@ -9,6 +10,8 @@ import { apiFetch, type Schemas } from "@/lib/api/client";
 
 export type Message = Schemas["MessageOut"];
 export type MessagePage = Schemas["MessagePage"];
+export type ToolCall = Schemas["ToolCallOut"];
+export type Run = Schemas["RunOut"];
 type MessagesData = InfiniteData<MessagePage, unknown>;
 
 const PAGE_SIZE = 30;
@@ -82,6 +85,45 @@ export function removeMessage(queryClient: QueryClient, chatId: string, messageI
       })),
     };
   });
+}
+
+/** Tool steps of every loaded run, grouped by run id, oldest first. */
+export function toolCallsByRun(data: MessagesData | undefined): Record<string, ToolCall[]> {
+  const byRun: Record<string, ToolCall[]> = {};
+  for (const page of [...(data?.pages ?? [])].reverse()) {
+    for (const call of page.tool_calls) (byRun[call.run_id] ??= []).push(call);
+  }
+  return byRun;
+}
+
+/** Adds a tool step to the newest page, or replaces it if it is already loaded. */
+export function upsertToolCall(queryClient: QueryClient, chatId: string, call: ToolCall): void {
+  queryClient.setQueryData<MessagesData>(messagesKey(chatId), (data) => {
+    if (!data) return data;
+    const known = data.pages.some((page) => page.tool_calls.some((item) => item.id === call.id));
+    const pages = data.pages.map((page, index) => {
+      if (known) {
+        return {
+          ...page,
+          tool_calls: page.tool_calls.map((item) => (item.id === call.id ? call : item)),
+        };
+      }
+      return index === 0 ? { ...page, tool_calls: [...page.tool_calls, call] } : page;
+    });
+    return { ...data, pages };
+  });
+}
+
+export function useRun(runId: string, enabled: boolean) {
+  return useQuery({
+    queryKey: ["run", runId],
+    queryFn: () => apiFetch<Run>("/runs/" + runId),
+    enabled,
+  });
+}
+
+export function cancelRun(runId: string) {
+  return apiFetch<Schemas["CancelResponse"]>("/runs/" + runId + "/cancel", { method: "POST" });
 }
 
 export function useSendMessage(chatId: string) {

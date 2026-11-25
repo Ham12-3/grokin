@@ -54,7 +54,7 @@ const message = (id: string, role: string, content: string) => ({
   role,
   bot_id: role === "bot" ? "bot-1" : null,
   content,
-  run_id: null,
+  run_id: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
 });
 
@@ -66,7 +66,25 @@ interface Call {
 }
 
 /** A tiny in-memory API behind `fetch`. */
-function fakeApi(initial: { bots?: (typeof BOT)[]; messages?: ReturnType<typeof message>[] }) {
+const TOOL_CALL = {
+  id: "t1",
+  run_id: "run-9",
+  step: 0,
+  tool: "web_fetch",
+  risk: "safe",
+  status: "ok",
+  summary: "Opened example.com",
+  result_summary: "Read example.com: Tauri releases",
+  started_at: "2026-01-01T00:00:00Z",
+  finished_at: "2026-01-01T00:00:01.500Z",
+};
+
+function fakeApi(initial: {
+  bots?: (typeof BOT)[];
+  messages?: ReturnType<typeof message>[];
+  toolCalls?: (typeof TOOL_CALL)[];
+  activeRunId?: string;
+}) {
   const bots = [...(initial.bots ?? [])];
   const messages = [...(initial.messages ?? [])];
   const calls: Call[] = [];
@@ -91,7 +109,30 @@ function fakeApi(initial: { bots?: (typeof BOT)[]; messages?: ReturnType<typeof 
       return new Response(null, { status: 204 });
     }
     if (path.includes("/messages") && method === "GET") {
-      return json({ items: messages, has_more: false, active_run_id: null });
+      return json({
+        items: messages,
+        has_more: false,
+        active_run_id: initial.activeRunId ?? null,
+        tool_calls: initial.toolCalls ?? [],
+      });
+    }
+    if (path.endsWith("/cancel") && method === "POST") {
+      return json({ run_id: "run-9", status: "running" }, 202);
+    }
+    if (path.startsWith("/runs/") && method === "GET") {
+      return json({
+        id: "run-9",
+        chat_id: "chat-1",
+        bot_id: "bot-1",
+        status: "completed",
+        steps: 2,
+        input_tokens: 1234,
+        output_tokens: 56,
+        error: null,
+        created_at: "2026-01-01T00:00:00Z",
+        started_at: "2026-01-01T00:00:00Z",
+        finished_at: "2026-01-01T00:00:03Z",
+      });
     }
     if (path.includes("/messages") && method === "POST") {
       const sent = message("m-new", "user", (body as { content: string }).content);
@@ -290,4 +331,55 @@ test("Sign out returns to the sign-in screen", async () => {
   fireEvent.click(await screen.findByRole("button", { name: "Sign out" }));
   await waitFor(() => expect(mocked.authLogout).toHaveBeenCalled());
   expect(await screen.findByLabelText("Email")).toBeInTheDocument();
+});
+
+// --- Tools, Stop and run details ---------------------------------------------------------
+
+test("tool steps show collapsed in the reply and expand to the safe result", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({
+    bots: [BOT],
+    messages: [{ ...message("m2", "bot", "Here is the summary."), run_id: "run-9" }],
+    toolCalls: [TOOL_CALL],
+  });
+  render(<App />);
+  const log = await screen.findByRole("log");
+
+  const steps = await within(log).findByRole("list", { name: "Steps" });
+  const summary = within(steps).getByText("Opened example.com");
+  expect(summary.closest("details")).not.toHaveAttribute("open");
+  expect(within(steps).getByText("Read example.com: Tauri releases")).toBeInTheDocument();
+  expect(within(steps).getByText(/Done in 1\.5s/)).toBeInTheDocument();
+});
+
+test("Stop cancels the run in progress", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [{ ...BOT, working: true }], activeRunId: "run-9" });
+  render(<App />);
+  await screen.findByRole("log");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Stop" }));
+  await waitFor(() =>
+    expect(calls.some((call) => call.method === "POST" && call.path === "/runs/run-9/cancel")).toBe(
+      true,
+    ),
+  );
+});
+
+test("run details show steps, tools, tokens and duration", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({
+    bots: [BOT],
+    messages: [{ ...message("m2", "bot", "Done."), run_id: "run-9" }],
+    toolCalls: [TOOL_CALL],
+  });
+  render(<App />);
+  const log = await screen.findByRole("log");
+
+  fireEvent.click(await within(log).findByRole("button", { name: "Details" }));
+  const dialog = await screen.findByRole("dialog");
+  expect(await within(dialog).findByText("Finished")).toBeInTheDocument();
+  expect(within(dialog).getByText("1,234 in, 56 out")).toBeInTheDocument();
+  expect(within(dialog).getByText("3.0s")).toBeInTheDocument();
+  expect(within(dialog).getByText("Opened example.com")).toBeInTheDocument();
 });

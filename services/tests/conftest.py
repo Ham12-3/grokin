@@ -7,6 +7,7 @@ down, unless CREW_REQUIRE_SERVICES=1 (set in CI), which makes that a failure.
 
 import asyncio
 import os
+import tempfile
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -46,6 +47,9 @@ os.environ.update(
         "SMTP_URL": "",
         "API_BASE_URL": "http://localhost:8000",
         "DESKTOP_DEEP_LINK": "crew://auth",
+        "WORKSPACES_DIR": tempfile.mkdtemp(prefix="crew-test-workspaces-"),
+        "SEARCH_API_KEY": "",
+        "LLM_PROVIDER": "anthropic",
     }
 )
 
@@ -169,7 +173,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
         await conn.execute(
             text(
                 "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
-                "messages, runs, usage_daily CASCADE"
+                "messages, runs, tool_calls, usage_daily CASCADE"
             )
         )
 

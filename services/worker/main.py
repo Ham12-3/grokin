@@ -3,14 +3,16 @@
 import uuid
 from typing import Any, ClassVar
 
+import httpx
 import structlog
 from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
+from crew.agent.loop import run_agent as run_agent_impl
 from crew.config import get_settings
 from crew.db import create_engine, create_session_factory
 from crew.llm import LLMError, create_llm
-from crew.runs.agent import run_agent as run_agent_impl
+from crew.tools import default_registry
 
 log = structlog.get_logger(__name__)
 
@@ -21,6 +23,8 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["engine"] = create_engine(settings)
     ctx["session_factory"] = create_session_factory(ctx["engine"])
     ctx["pubsub_redis"] = Redis.from_url(settings.redis_url, decode_responses=True)
+    ctx["http"] = httpx.AsyncClient(follow_redirects=False)
+    ctx["registry"] = default_registry()
     try:
         ctx["llm"] = create_llm(settings)
         ctx["llm_error"] = None
@@ -32,6 +36,7 @@ async def startup(ctx: dict[str, Any]) -> None:
 
 
 async def shutdown(ctx: dict[str, Any]) -> None:
+    await ctx["http"].aclose()
     await ctx["pubsub_redis"].aclose()
     await ctx["engine"].dispose()
 
@@ -43,6 +48,8 @@ async def run_agent(ctx: dict[str, Any], run_id: str) -> str:
         redis=ctx["pubsub_redis"],
         settings=ctx["settings"],
         llm=ctx["llm"],
+        registry=ctx["registry"],
+        http=ctx["http"],
         llm_error=ctx["llm_error"],
     )
 

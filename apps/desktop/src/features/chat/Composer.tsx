@@ -1,4 +1,4 @@
-import { SendHorizontal } from "lucide-react";
+import { SendHorizontal, Square } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -8,9 +8,11 @@ interface ComposerProps {
   /** True while the Bot is replying or the message is being sent. */
   busy: boolean;
   onSend: (text: string) => void;
+  /** Present while a run can be stopped: the Send button becomes Stop. */
+  onStop?: () => void;
 }
 
-export function Composer({ botName, busy, onSend }: ComposerProps) {
+export function Composer({ botName, busy, onSend, onStop }: ComposerProps) {
   const [text, setText] = useState("");
   const canSend = !busy && text.trim().length > 0;
 
@@ -39,9 +41,15 @@ export function Composer({ botName, busy, onSend }: ComposerProps) {
         onChange={(event) => setText(event.target.value)}
         onKeyDown={onKeyDown}
       />
-      <Button type="button" size="icon" aria-label="Send" disabled={!canSend} onClick={send}>
-        <SendHorizontal />
-      </Button>
+      {onStop ? (
+        <Button type="button" size="icon" variant="outline" aria-label="Stop" onClick={onStop}>
+          <Square className="fill-current" />
+        </Button>
+      ) : (
+        <Button type="button" size="icon" aria-label="Send" disabled={!canSend} onClick={send}>
+          <SendHorizontal />
+        </Button>
+      )}
     </div>
   );
 }

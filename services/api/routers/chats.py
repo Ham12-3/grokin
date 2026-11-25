@@ -15,6 +15,7 @@ from crew.schemas.chat import (
     SendMessageRequest,
     SendMessageResponse,
 )
+from crew.schemas.run import ToolCallOut
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -45,6 +46,7 @@ async def list_messages(
         items=[MessageOut.model_validate(message) for message in page.items],
         has_more=page.has_more,
         active_run_id=page.active_run_id,
+        tool_calls=[ToolCallOut.model_validate(call) for call in page.tool_calls],
     )
 
 

@@ -1,21 +1,17 @@
-"""Claude through the official Anthropic SDK, with streaming."""
+"""Claude through the official Anthropic SDK, with streaming and tool use."""
+
+from typing import Any, cast
 
 import anthropic
 import structlog
-from anthropic.types import MessageParam
+from anthropic.types import MessageParam, ToolParam
 
 from crew.config import Settings
-from crew.llm.base import ChatTurn, LLMError, LLMResult, OnDelta
+from crew.llm.base import LLMError, LLMResult, MessageDict, OnDelta, ToolDefinition, ToolUse
 
 log = structlog.get_logger(__name__)
 
 REFUSAL_TEXT = "I can't help with that request."
-
-
-def _param(turn: ChatTurn) -> MessageParam:
-    if turn.role == "user":
-        return {"role": "user", "content": turn.content}
-    return {"role": "assistant", "content": turn.content}
 
 
 class AnthropicLLM:
@@ -29,16 +25,23 @@ class AnthropicLLM:
         self._max_tokens = settings.crew_max_output_tokens
 
     async def stream(
-        self, *, system: str, messages: list[ChatTurn], on_delta: OnDelta
+        self,
+        *,
+        system: str,
+        messages: list[MessageDict],
+        tools: list[ToolDefinition],
+        on_delta: OnDelta,
     ) -> LLMResult:
-        params = [_param(turn) for turn in messages]
+        request: dict[str, Any] = {
+            "model": self._model,
+            "max_tokens": self._max_tokens,
+            "system": system,
+            "messages": cast(list[MessageParam], messages),
+        }
+        if tools:
+            request["tools"] = cast(list[ToolParam], tools)
         try:
-            async with self._client.messages.stream(
-                model=self._model,
-                max_tokens=self._max_tokens,
-                system=system,
-                messages=params,
-            ) as stream:
+            async with self._client.messages.stream(**request) as stream:
                 async for text in stream.text_stream:
                     await on_delta(text)
                 final = await stream.get_final_message()
@@ -68,4 +71,11 @@ class AnthropicLLM:
             input_tokens=final.usage.input_tokens,
             output_tokens=final.usage.output_tokens,
             stop_reason=final.stop_reason,
+            tool_uses=[
+                ToolUse(block.id, block.name, block.input)
+                for block in final.content
+                if block.type == "tool_use"
+            ],
+            # Only the fields the API sent, so every block (thinking included) goes back as is.
+            content=[block.to_dict(mode="json") for block in final.content],
         )

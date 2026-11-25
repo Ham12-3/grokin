@@ -6,6 +6,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from crew.schemas.run import ToolCallOut
+
 ApprovalMode = Literal["always_ask", "ask_risky", "never_ask"]
 
 
@@ -80,6 +82,8 @@ class MessagePage(BaseModel):
     items: list[MessageOut]
     has_more: bool
     active_run_id: uuid.UUID | None
+    # Tool steps of the runs behind these messages, oldest first.
+    tool_calls: list[ToolCallOut]
 
 
 class SendMessageRequest(BaseModel):

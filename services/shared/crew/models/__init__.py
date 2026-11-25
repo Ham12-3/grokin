@@ -1,6 +1,6 @@
 """SQLAlchemy models. Tables arrive with the phase that needs them."""
 
-from crew.models.chat import Bot, Chat, ChatMember, Message, Run, UsageDaily
+from crew.models.chat import Bot, Chat, ChatMember, Message, Run, ToolCall, UsageDaily
 from crew.models.user import AuditLog, RefreshToken, User
 
 __all__ = [
@@ -11,6 +11,7 @@ __all__ = [
     "Message",
     "RefreshToken",
     "Run",
+    "ToolCall",
     "UsageDaily",
     "User",
 ]

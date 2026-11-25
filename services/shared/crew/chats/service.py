@@ -13,8 +13,9 @@ from crew import events
 from crew.bots.service import load_bot
 from crew.config import Settings
 from crew.errors import AppError
-from crew.models import Chat, ChatMember, Message, Run
+from crew.models import Chat, ChatMember, Message, Run, ToolCall
 from crew.runs.state import active_run_id
+from crew.runs.tool_calls import tool_calls_for_runs
 from crew.schemas.chat import ChatOut, MessageOut
 
 
@@ -29,6 +30,7 @@ class MessagePageData:
     items: list[Message]
     has_more: bool
     active_run_id: uuid.UUID | None
+    tool_calls: list[ToolCall]
 
 
 def not_found() -> AppError:
@@ -119,7 +121,11 @@ async def list_messages(
     rows = (await session.scalars(query.order_by(Message.id.desc()).limit(limit + 1))).all()
     has_more = len(rows) > limit
     items = list(reversed(rows[:limit]))
-    return MessagePageData(items, has_more, await active_run_id(session, settings, chat.id))
+    run_ids = {message.run_id for message in items if message.role == "bot" and message.run_id}
+    tool_calls = await tool_calls_for_runs(session, user_id, run_ids)
+    return MessagePageData(
+        items, has_more, await active_run_id(session, settings, chat.id), tool_calls
+    )
 
 
 async def send_message(

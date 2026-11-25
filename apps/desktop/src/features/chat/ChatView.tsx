@@ -1,8 +1,8 @@
 import { PanelRight, Star } from "lucide-react";
-import { useCallback, useEffect, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
-import { flattenMessages, useMessages, useSendMessage } from "./api";
+import { cancelRun, flattenMessages, toolCallsByRun, useMessages, useSendMessage } from "./api";
 import { Button } from "@/components/ui/button";
 import type { Bot } from "@/features/bots/api";
 import { StatusDot } from "@/features/bots/StatusDot";
@@ -22,6 +22,22 @@ export function ChatView({ bot, chatId, working, onToggleDetails }: ChatViewProp
   const sendMessage = useSendMessage(chatId);
   const runError = useLiveStore((state) => state.errors[chatId]);
   const items = useMemo(() => flattenMessages(messages.data), [messages.data]);
+  const toolCalls = useMemo(() => toolCallsByRun(messages.data), [messages.data]);
+  const liveRunId = useLiveStore((state) => state.runs[chatId]);
+  // After a restart the live store is empty: the newest page knows the run in progress.
+  const activeRunId = liveRunId ?? messages.data?.pages[0]?.active_run_id ?? undefined;
+  const [stopping, setStopping] = useState(false);
+
+  async function stop(runId: string) {
+    setStopping(true);
+    try {
+      await cancelRun(runId);
+    } catch {
+      // The run may have just finished; the next status event settles it.
+    } finally {
+      setStopping(false);
+    }
+  }
   const { fetchNextPage } = messages;
   const loadOlder = useCallback(() => void fetchNextPage(), [fetchNextPage]);
 
@@ -68,6 +84,7 @@ export function ChatView({ bot, chatId, working, onToggleDetails }: ChatViewProp
         <MessageList
           bot={bot}
           messages={items}
+          toolCalls={toolCalls}
           hasOlder={messages.hasNextPage}
           loadingOlder={messages.isFetchingNextPage}
           onLoadOlder={loadOlder}
@@ -82,6 +99,7 @@ export function ChatView({ bot, chatId, working, onToggleDetails }: ChatViewProp
       <Composer
         botName={bot.name}
         busy={working || sendMessage.isPending}
+        onStop={working && activeRunId && !stopping ? () => void stop(activeRunId) : undefined}
         onSend={(text) => {
           clearChatError(chatId);
           sendMessage.mutate(text);

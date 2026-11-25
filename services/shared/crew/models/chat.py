@@ -78,6 +78,31 @@ class Run(Base, IdMixin, TimestampMixin):
     input_tokens: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     output_tokens: Mapped[int] = mapped_column(BigInteger, server_default=text("0"))
     error: Mapped[str | None] = mapped_column(Text)
+    # The messages added during this run (assistant turns and tool results), so a run can
+    # be rebuilt exactly when it resumes after an approval.
+    transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'"))
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ToolCall(Base, IdMixin, TimestampMixin):
+    """One tool call. Written before the tool runs and updated after it finishes."""
+
+    __tablename__ = "tool_calls"
+    __table_args__ = (Index("ix_tool_calls_run", "run_id", "id"),)
+
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    step: Mapped[int] = mapped_column(Integer)
+    llm_tool_use_id: Mapped[str] = mapped_column(Text)  # the id Claude gave this call
+    tool: Mapped[str] = mapped_column(Text)
+    args: Mapped[dict[str, Any]] = mapped_column(JSONB)  # vault placeholders, never raw secrets
+    risk: Mapped[str] = mapped_column(Text)  # safe | risky
+    # pending | waiting_approval | running | ok | error | rejected
+    status: Mapped[str] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text, server_default=text("''"))  # safe text for the UI
+    result_summary: Mapped[str | None] = mapped_column(Text)
+    result_ref: Mapped[str | None] = mapped_column(Text)  # pointer to large output (later)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 

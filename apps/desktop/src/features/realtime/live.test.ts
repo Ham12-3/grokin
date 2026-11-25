@@ -1,7 +1,13 @@
 import { QueryClient, type InfiniteData } from "@tanstack/react-query";
 import { beforeEach, expect, test, vi } from "vitest";
 import { applyDelta, handleEvent, handleReconnected, resetLive, useLiveStore } from "./live";
-import { flattenMessages, messagesKey, type Message, type MessagePage } from "@/features/chat/api";
+import {
+  flattenMessages,
+  messagesKey,
+  toolCallsByRun,
+  type Message,
+  type MessagePage,
+} from "@/features/chat/api";
 
 const CHAT = "chat-1";
 const BOT = "bot-1";
@@ -22,7 +28,7 @@ function seeded(items: Message[]): QueryClient {
   // No garbage-collection timers: nothing mounts these queries.
   const queryClient = new QueryClient({ defaultOptions: { queries: { gcTime: Infinity } } });
   queryClient.setQueryData<InfiniteData<MessagePage, unknown>>(messagesKey(CHAT), {
-    pages: [{ items, has_more: false, active_run_id: null }],
+    pages: [{ items, has_more: false, active_run_id: null, tool_calls: [] }],
     pageParams: [undefined],
   });
   return queryClient;
@@ -173,4 +179,88 @@ test("reconnecting drops live text and refetches Bots and messages", () => {
   expect(useLiveStore.getState().working).toEqual({});
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ["bots"] });
   expect(invalidate).toHaveBeenCalledWith({ queryKey: ["messages"] });
+});
+
+const toolCall = (status: string, result: string | null) => ({
+  id: "t1",
+  run_id: "run-1",
+  step: 0,
+  tool: "web_fetch",
+  risk: "safe",
+  status,
+  summary: "Opened example.com",
+  result_summary: result,
+  started_at: null,
+  finished_at: null,
+});
+
+test("tool steps appear when they start and update when they finish", () => {
+  const queryClient = seeded([message("m2", "bot", "")]);
+  const steps = () => toolCallsByRun(queryClient.getQueryData(messagesKey(CHAT)))["run-1"];
+  handleEvent(queryClient, {
+    type: "tool.started",
+    chat_id: CHAT,
+    run_id: "run-1",
+    tool_call: toolCall("pending", null),
+  });
+  expect(steps().map((step) => step.status)).toEqual(["pending"]);
+  handleEvent(queryClient, {
+    type: "tool.finished",
+    chat_id: CHAT,
+    run_id: "run-1",
+    tool_call: toolCall("ok", "Read example.com"),
+  });
+  expect(steps()).toHaveLength(1);
+  expect(steps()[0]).toMatchObject({ status: "ok", result_summary: "Read example.com" });
+});
+
+test("the run in progress is tracked so it can be stopped", () => {
+  const queryClient = seeded([]);
+  const status = (value: string, runId: string) =>
+    handleEvent(queryClient, {
+      type: "run.status",
+      chat_id: CHAT,
+      bot_id: BOT,
+      run_id: runId,
+      status: value,
+    });
+  status("queued", "run-1");
+  expect(useLiveStore.getState().runs[CHAT]).toBe("run-1");
+  status("running", "run-1");
+  expect(useLiveStore.getState().runs[CHAT]).toBe("run-1");
+  status("completed", "run-0"); // an older run finishing must not clear the current one
+  expect(useLiveStore.getState().runs[CHAT]).toBe("run-1");
+  status("cancelled", "run-1");
+  expect(useLiveStore.getState().runs[CHAT]).toBeUndefined();
+});
+
+test("a stopped run keeps its partial text and shows no error", () => {
+  const queryClient = seeded([message("m2", "bot", "")]);
+  handleEvent(queryClient, delta(0, "Half"));
+  handleEvent(queryClient, {
+    type: "run.status",
+    chat_id: CHAT,
+    bot_id: BOT,
+    run_id: "run-1",
+    status: "cancelled",
+    message_id: "m2",
+    message_kept: true,
+  });
+  expect(contents(queryClient)).toEqual(["Half"]);
+  expect(useLiveStore.getState().errors[CHAT]).toBeUndefined();
+  expect(useLiveStore.getState().working[BOT]).toBe(false);
+});
+
+test("a run stopped before it said anything leaves no empty bubble", () => {
+  const queryClient = seeded([message("m1", "user", "hi"), message("m2", "bot", "")]);
+  handleEvent(queryClient, {
+    type: "run.status",
+    chat_id: CHAT,
+    bot_id: BOT,
+    run_id: "run-1",
+    status: "cancelled",
+    message_id: "m2",
+    message_kept: false,
+  });
+  expect(contents(queryClient)).toEqual(["hi"]);
 });

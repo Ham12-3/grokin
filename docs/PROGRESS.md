@@ -4,7 +4,7 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 2 (Bots + streaming chat): built, waiting for your hands-on check.
+Phase 3 (agent loop + first tools): built, waiting for your hands-on check.
 
 ## Done
 
@@ -92,17 +92,56 @@ Desktop
 - `src/lib/ws.ts`: one WebSocket, backoff 1s to 30s, re-subscribes and refetches after a
   reconnect; "Reconnecting..." banner; Zustand store for live text.
 
+### Phase 3: agent loop + first tools
+
+Backend
+
+- Migration `0004`: `tool_calls` (with `user_id`, `step`, `llm_tool_use_id`, `summary`) and
+  `runs.transcript`.
+- `crew/agent/loop.py`: calls the LLM, runs the tools it asks for, repeats. Step limit
+  (`CREW_MAX_STEPS`), per-run token limit (`CREW_MAX_RUN_TOKENS`), daily budget, cancel.
+  Every tool call is written before it runs and updated after. The run's assistant turns and
+  tool results are saved in `runs.transcript`.
+- `crew/tools/registry.py`: tool definition (JSON schema, risk function, timeout, max output,
+  safe summary), argument validation, timeouts, truncation, `<untrusted>` wrapping that
+  cannot be closed from inside.
+- `crew/approvals/policy.py`: the server-side gate. A risky call, or any write by an
+  `always_ask` Bot, is NOT run; the model is told it needs approval. Cards arrive in phase 5.
+- Tools: `web_search` (Brave behind one function), `web_fetch` (SSRF guard in
+  `crew/tools/net.py`), `files_write` / `files_read` / `files_list` on a per-user folder
+  `data/workspaces/{user_id}` behind a `Workspace` interface.
+- Events `tool.started`, `tool.finished`; `run.status` gains `cancelled`.
+- `GET /runs/{id}`, `GET /runs/{id}/tool-calls`, `POST /runs/{id}/cancel`. Message pages
+  include the tool steps of their runs.
+- `FakeLLM` plays scripted turns with tool calls. With `LLM_PROVIDER=fake`, a message that
+  contains a link makes it fetch the page and save `notes.md`.
+
+Desktop
+
+- Tool step rows inside the reply: collapsed, expandable, safe summaries only.
+- Stop button while a run is going.
+- "Details" under each reply: status, steps, tools, tokens, duration.
+
 ## Next
 
-- Phase 3: agent loop + tools (`prompts/phase-03-agent-loop.md`).
+- Phase 4: cloud computer + live screen (`prompts/phase-04-cloud-computer.md`).
 
 ## Shortcuts taken (to revisit)
 
-- Claude itself has not been called yet: no `ANTHROPIC_API_KEY` was set, so streaming was
-  verified with `FakeLLM` only. First real run needs a check of `crew/llm/anthropic_llm.py`.
+- Claude itself has still not been called: no `ANTHROPIC_API_KEY` is set, so the loop and
+  tool use were verified with `FakeLLM` only. The first real run needs a check of
+  `crew/llm/anthropic_llm.py`, in particular replaying assistant turns (thinking blocks)
+  from `runs.transcript`.
+- `web_search` has not run against the real Brave API (no `SEARCH_API_KEY`); it is tested
+  with a stubbed response. Without a key the tool tells the model to use `web_fetch`.
+- Pause and resume are not built (phase 4 Take over uses them). Only cancel exists.
+- A call that needs approval is refused, not queued. `always_ask` Bots therefore cannot
+  write files until phase 5.
+- Raw tool arguments are stored in `tool_calls.args` but not returned by the API yet.
+- Earlier runs' tool results are not replayed to the model in later turns; it sees the
+  earlier replies as text only.
 - Server-side refusal fallbacks (the Anthropic `fallbacks` beta) are not enabled; a refused
   request shows a short "can't help with that" reply. Decide when a key is available.
-- No daily budget enforcement yet (usage is recorded and shown); it arrives with phase 3.
 - The details pane tabs other than Settings are placeholders.
 - Scrolling up to load older messages was not exercised in the running app (the paging API
   and the button are tested).
@@ -122,6 +161,11 @@ Desktop
   `CREW_REQUIRE_SERVICES=1` so they fail there instead.
 
 ## Known issues
+
+- A failed step still reads "Opened example.com" (with a warning icon and the reason
+  when expanded): step summaries are written before the tool runs.
+- Files are on the backend machine's disk for now; they move to the cloud computer in
+  phase 4.
 
 - After an outage the app can take up to about 30 seconds to reconnect once the API is back,
   because of the reconnect backoff in the spec.
@@ -161,3 +205,9 @@ Desktop
 | 2026-11-24 | `messages.bot_id` and `messages.run_id` use `ON DELETE SET NULL` | The spec left them without a delete rule, which would block deleting a Bot. |
 | 2026-11-24 | `.env.example` defaults: `CREW_MODEL=claude-opus-5-5`, `CREW_SMALL_MODEL=claude-haiku-5-5` | Current models; change `CREW_MODEL` to trade cost for capability. |
 | 2026-11-24 | `LLM_PROVIDER=fake` dev mode | Lets the app and UI be tried and tested without spending tokens. |
+| 2026-11-24 | Messages and tools use Anthropic's own shapes inside the LLM interface | The transcript can be stored and replayed exactly, including blocks the app does not read. |
+| 2026-11-24 | `web_fetch` connects to the IP address it checked, with the original Host and TLS name | A second DNS answer cannot redirect the request to an internal address. |
+| 2026-11-24 | Step and token limits end the run as `completed` with a note in the reply and a code in `runs.error` | The work done so far is kept and the user sees why it stopped. |
+| 2026-11-24 | Stop interrupts the run's task, and the final write uses a fresh database session | It works mid-stream and mid-tool, within about a second. |
+| 2026-11-24 | `tool_calls.user_id` added | Every per-user table is filtered by `user_id` directly. |
+| 2026-11-24 | `jsonschema` validates tool arguments | The model's arguments are checked before any tool code runs. |

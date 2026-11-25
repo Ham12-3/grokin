@@ -14,7 +14,7 @@ from redis.asyncio import Redis
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import ws
-from api.routers import auth, bots, chats
+from api.routers import auth, bots, chats, runs
 from crew import __version__
 from crew.auth.mailer import create_mailer
 from crew.auth.tokens import require_jwt_secret
@@ -39,6 +39,7 @@ async def health(request: Request) -> HealthResponse:
 router.include_router(auth.router)
 router.include_router(bots.router)
 router.include_router(chats.router)
+router.include_router(runs.router)
 router.include_router(ws.router)
 
 

@@ -57,6 +57,7 @@ class Settings(BaseSettings):
     crew_small_model: str = ""
     crew_max_output_tokens: int = 16_000
     crew_max_steps: int = 40
+    crew_max_run_tokens: int = 400_000
     crew_daily_token_budget: int = 2_000_000
 
     # Limits
@@ -65,10 +66,19 @@ class Settings(BaseSettings):
     run_timeout_seconds: int = 600
     partial_save_seconds: float = 1.0
     ws_max_subscriptions: int = 50
+    cancel_poll_seconds: float = 0.3
 
-    # Web search
+    # Web search and fetch
     search_provider: str = "brave"
     search_api_key: str = Field(default="", repr=False)
+    search_api_url: str = "https://api.search.brave.com/res/v1/web/search"
+    search_result_count: int = 8
+    web_fetch_max_bytes: int = 2_000_000
+    web_fetch_timeout_seconds: float = 15.0
+
+    # Files (local workspaces until the cloud computer arrives in phase 4)
+    workspaces_dir: str = str(REPO_ROOT / "data" / "workspaces")
+    file_max_bytes: int = 1_000_000
 
     # Auth providers
     google_client_id: str = ""

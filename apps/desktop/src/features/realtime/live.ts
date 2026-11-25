@@ -10,7 +10,9 @@ import {
   removeMessage,
   setMessageContent,
   upsertMessage,
+  upsertToolCall,
   type Message,
+  type ToolCall,
 } from "@/features/chat/api";
 import type { ServerEvent, WsStatus } from "@/lib/ws";
 
@@ -22,6 +24,8 @@ interface LiveStore {
   working: Record<string, boolean>;
   /** Last run error by chat id. */
   errors: Record<string, string>;
+  /** The run in progress by chat id, so it can be stopped. */
+  runs: Record<string, string>;
 }
 
 export const useLiveStore = create<LiveStore>(() => ({
@@ -29,6 +33,7 @@ export const useLiveStore = create<LiveStore>(() => ({
   streaming: {},
   working: {},
   errors: {},
+  runs: {},
 }));
 
 const initialState = useLiveStore.getState();
@@ -112,22 +117,37 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
       }
       break;
     }
+    case "tool.started":
+    case "tool.finished":
+      upsertToolCall(queryClient, chatId, event.tool_call as ToolCall);
+      break;
     case "run.status": {
       const status = str(event.status);
       const botId = str(event.bot_id);
+      const runId = str(event.run_id);
       const active = status === "queued" || status === "running";
-      useLiveStore.setState((state) => ({ working: { ...state.working, [botId]: active } }));
+      useLiveStore.setState((state) => {
+        const runs = { ...state.runs };
+        if (active) runs[chatId] = runId;
+        else if (runs[chatId] === runId) delete runs[chatId];
+        return { working: { ...state.working, [botId]: active }, runs };
+      });
       if (status === "queued") clearChatError(chatId);
-      if (status === "completed") void queryClient.invalidateQueries({ queryKey: ["me"] });
-      if (status === "failed") {
+      if (!active) {
+        void queryClient.invalidateQueries({ queryKey: ["me"] });
+        void queryClient.invalidateQueries({ queryKey: ["run", runId] });
+      }
+      if (status === "failed" || status === "cancelled") {
         const messageId = str(event.message_id);
         const text = useLiveStore.getState().streaming[messageId];
-        if (event.message_kept === true && text !== undefined) {
-          setMessageContent(queryClient, chatId, messageId, text);
-        } else if (event.message_kept !== true) {
+        if (messageId && event.message_kept !== true) {
           removeMessage(queryClient, chatId, messageId);
+        } else if (messageId && text !== undefined) {
+          setMessageContent(queryClient, chatId, messageId, text);
         }
-        setStreaming(messageId, undefined);
+        if (messageId) setStreaming(messageId, undefined);
+      }
+      if (status === "failed") {
         const error = event.error as { message?: unknown } | undefined;
         const message = str(error?.message) || "Something went wrong while replying. Try again.";
         useLiveStore.setState((state) => ({ errors: { ...state.errors, [chatId]: message } }));
@@ -141,7 +161,7 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
 
 /** After a reconnect: drop live text and refetch, so nothing is lost or doubled. */
 export function handleReconnected(queryClient: QueryClient): void {
-  useLiveStore.setState({ streaming: {}, working: {} });
+  useLiveStore.setState({ streaming: {}, working: {}, runs: {} });
   lastResync.clear();
   void queryClient.invalidateQueries({ queryKey: ["bots"] });
   void queryClient.invalidateQueries({ queryKey: ["messages"] });

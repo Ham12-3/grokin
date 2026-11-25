@@ -1,1 +1,474 @@
-"""The agent loop. Built in phase 3. See docs/06-agent-loop.md."""
+"""The agent loop: call the LLM, run the tools it asks for, repeat until it is done.
+
+Runs inside the worker, never inside an API request. See docs/06-agent-loop.md.
+
+- Every tool call is written to `tool_calls` before it runs and updated after.
+- A call that needs approval never runs (see `crew.approvals.policy`).
+- Tool output from outside is wrapped in <untrusted> tags by the registry.
+- The loop stops at the step limit, the token budgets, on cancel, or when the LLM is done.
+- Each text delta carries its character `offset`, so a reconnecting client can tell whether
+  it missed anything.
+"""
+
+import asyncio
+import contextlib
+import time
+import uuid
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from typing import Any
+
+import httpx
+import structlog
+from redis.asyncio import Redis
+from sqlalchemy import func, select, update
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
+
+from crew import events, usage
+from crew.agent.prompts import build_system_prompt
+from crew.approvals import policy
+from crew.budget import BudgetStop, check_budget, step_limit_stop
+from crew.config import Settings
+from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
+from crew.models import Bot, Chat, Message, Run, ToolCall
+from crew.schemas.chat import MessageOut
+from crew.schemas.run import ToolCallOut
+from crew.tools.registry import ToolContext, ToolRegistry, ToolResult, validation_message
+
+log = structlog.get_logger(__name__)
+
+GENERIC_ERROR = "Something went wrong while replying. Try again."
+OUTPUT_LIMIT = BudgetStop(
+    "output_limit", "My reply was cut off because it reached the length limit."
+)
+APPROVALS_NOT_READY = (
+    " Approvals are not available yet, so this action was not run. "
+    "Tell the user you could not do it."
+)
+
+
+def cancel_key(run_id: uuid.UUID | str) -> str:
+    return f"run:{run_id}:cancel"
+
+
+async def request_cancel(redis: Redis, run_id: uuid.UUID) -> None:
+    """Asks the worker to stop a run. It notices within `cancel_poll_seconds`."""
+    await redis.set(cancel_key(run_id), "1", ex=3600)
+
+
+@dataclass
+class Outcome:
+    status: str  # completed | failed | cancelled
+    stop: BudgetStop | None = None
+    error: LLMError | None = None
+
+
+@dataclass
+class _State:
+    """Everything the loop needs, kept in plain values so a cancel cannot corrupt it."""
+
+    run_id: uuid.UUID
+    chat_id: uuid.UUID
+    user_id: uuid.UUID
+    bot_id: uuid.UUID
+    message_id: uuid.UUID
+    approval_mode: str
+    redis: Redis
+    settings: Settings
+    parts: list[str] = field(default_factory=list)
+    length: int = 0
+    need_separator: bool = False
+    cancel_requested: bool = False
+    last_saved: float = field(default_factory=time.monotonic)
+
+    @property
+    def text(self) -> str:
+        return "".join(self.parts)
+
+    async def publish_chat(self, event_type: str, **payload: object) -> None:
+        await events.publish(
+            self.redis,
+            events.chat_channel(self.chat_id),
+            event_type,
+            {"chat_id": str(self.chat_id), **payload},
+        )
+
+    async def publish_status(self, status: str, **extra: object) -> None:
+        await events.publish(
+            self.redis,
+            events.user_channel(self.user_id),
+            "run.status",
+            {
+                "run_id": str(self.run_id),
+                "chat_id": str(self.chat_id),
+                "bot_id": str(self.bot_id),
+                "status": status,
+                **extra,
+            },
+        )
+
+    async def emit(self, text: str) -> None:
+        """Adds text to the reply and streams it to the chat."""
+        if not text:
+            return
+        await self.publish_chat(
+            "message.delta", message_id=str(self.message_id), offset=self.length, text=text
+        )
+        self.parts.append(text)
+        self.length += len(text)
+
+
+async def _history(
+    session: AsyncSession, settings: Settings, chat_id: uuid.UUID, skip: uuid.UUID
+) -> list[MessageDict]:
+    """Earlier messages as alternating user/assistant text turns, starting with a user turn."""
+    rows = (
+        await session.scalars(
+            select(Message)
+            .where(
+                Message.chat_id == chat_id,
+                Message.role.in_(("user", "bot")),
+                Message.id != skip,
+            )
+            .order_by(Message.id.desc())
+            .limit(settings.chat_history_messages)
+        )
+    ).all()
+    turns: list[MessageDict] = []
+    for message in reversed(rows):
+        if not message.content.strip():
+            continue
+        role = "user" if message.role == "user" else "assistant"
+        if turns and turns[-1]["role"] == role:
+            # The API wants alternating roles: merge neighbours (for example after a failed run).
+            turns[-1] = {"role": role, "content": f"{turns[-1]['content']}\n\n{message.content}"}
+        else:
+            turns.append({"role": role, "content": message.content})
+    while turns and turns[0]["role"] != "user":
+        turns.pop(0)
+    return turns
+
+
+async def _watch_cancel(state: _State, task: asyncio.Task[Any]) -> None:
+    """Interrupts the loop, wherever it is, soon after the user presses Stop."""
+    while True:
+        if await state.redis.exists(cancel_key(state.run_id)):
+            state.cancel_requested = True
+            task.cancel()
+            return
+        await asyncio.sleep(state.settings.cancel_poll_seconds)
+
+
+async def _wait_shielded(task: asyncio.Task[None], state: _State) -> None:
+    """Waits for the final write. Our own Stop interrupt may arrive late; it must not skip it."""
+    while True:
+        try:
+            await asyncio.shield(task)
+            return
+        except asyncio.CancelledError:
+            if not state.cancel_requested:
+                raise  # the worker itself is shutting down
+            if task.done():
+                return
+
+
+async def _run_tool(
+    state: _State,
+    session: AsyncSession,
+    registry: ToolRegistry,
+    ctx: ToolContext,
+    step: int,
+    use: ToolUse,
+) -> dict[str, Any]:
+    """Records, checks and runs one tool call. Returns the tool_result block for the LLM."""
+    tool = registry.get(use.name)
+    args: dict[str, Any] = use.input if isinstance(use.input, dict) else {}
+    invalid = None if tool is None else validation_message(tool, use.input)
+    risk = tool.risk(args) if tool is not None and invalid is None else "safe"
+    summary = tool.summary(args) if tool is not None else f"Tried an unknown tool: {use.name[:40]}"
+
+    # Written BEFORE anything runs.
+    row = ToolCall(
+        run_id=state.run_id,
+        user_id=state.user_id,
+        step=step,
+        llm_tool_use_id=use.id,
+        tool=use.name[:80],
+        args=args,
+        risk=risk,
+        status="pending",
+        summary=summary[:300],
+    )
+    session.add(row)
+    await session.commit()
+    await session.refresh(row)
+
+    async def announce(event_type: str) -> None:
+        await state.publish_chat(
+            event_type,
+            run_id=str(state.run_id),
+            tool_call=ToolCallOut.model_validate(row).model_dump(mode="json"),
+        )
+
+    await announce("tool.started")
+
+    final_status = "error"
+    if tool is None:
+        result = ToolResult(False, f"There is no tool named {use.name[:40]}.", "Unknown tool")
+    elif invalid is not None:
+        result = ToolResult(False, invalid, "Invalid arguments")
+    else:
+        decision = policy.check(state.approval_mode, tool, risk)
+        if decision.needs_approval:
+            # The gate: this call does not run. Phase 5 turns this into an approval card.
+            final_status = "rejected"
+            result = ToolResult(
+                False,
+                f"{decision.reason}{APPROVALS_NOT_READY}",
+                "Needs your approval (not available yet)",
+            )
+        else:
+            row.status = "running"
+            row.started_at = datetime.now(UTC)
+            await session.commit()
+            result = await registry.execute(tool, args, ctx)
+            if result.ok:
+                final_status = "ok"
+
+    # Updated AFTER it ran (or was refused).
+    row.status = final_status
+    row.result_summary = result.summary
+    row.finished_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(row)
+    await announce("tool.finished")
+
+    block: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": use.id,
+        "content": result.content,
+    }
+    if not result.ok:
+        block["is_error"] = True
+    return block
+
+
+async def _loop(
+    state: _State,
+    session: AsyncSession,
+    run: Run,
+    message: Message,
+    bot: Bot,
+    llm: LLM,
+    registry: ToolRegistry,
+    ctx: ToolContext,
+) -> Outcome:
+    settings = state.settings
+    system = build_system_prompt(bot)
+    tools = registry.definitions(bot.enabled_tools)
+    transcript: list[MessageDict] = list(run.transcript)
+    messages = await _history(session, settings, state.chat_id, state.message_id) + transcript
+    if not messages:
+        raise LLMError("empty_chat", "There is no message to reply to.")
+
+    async def on_delta(text: str) -> None:
+        if not text:
+            return
+        if state.need_separator:
+            state.need_separator = False
+            await state.emit("\n\n")
+        await state.emit(text)
+        # Save the partial text now and then, so a reconnecting client can catch up.
+        if time.monotonic() - state.last_saved >= settings.partial_save_seconds:
+            message.content = state.text
+            await session.commit()
+            state.last_saved = time.monotonic()
+
+    for step in range(settings.crew_max_steps):
+        stop = await check_budget(session, settings, run, state.user_id)
+        if stop is not None:
+            return Outcome("completed", stop=stop)
+
+        result = await llm.stream(system=system, messages=messages, tools=tools, on_delta=on_delta)
+
+        run.steps = step + 1
+        run.input_tokens += result.input_tokens
+        run.output_tokens += result.output_tokens
+        await usage.add_usage(
+            session,
+            state.user_id,
+            input_tokens=result.input_tokens,
+            output_tokens=result.output_tokens,
+        )
+        if result.content:
+            assistant: MessageDict = {"role": "assistant", "content": result.content}
+            messages.append(assistant)
+            transcript.append(assistant)
+            run.transcript = list(transcript)
+        message.content = state.text
+        await session.commit()
+        state.need_separator = state.length > 0
+
+        if result.stop_reason != "tool_use" or not result.tool_uses:
+            if result.stop_reason == "max_tokens":
+                return Outcome("completed", stop=OUTPUT_LIMIT)
+            return Outcome("completed")
+
+        results = [
+            await _run_tool(state, session, registry, ctx, step, use) for use in result.tool_uses
+        ]
+        tool_message: MessageDict = {"role": "user", "content": results}
+        messages.append(tool_message)
+        transcript.append(tool_message)
+        run.transcript = list(transcript)
+        await session.commit()
+
+    return Outcome("completed", stop=step_limit_stop(settings))
+
+
+async def _finish(
+    state: _State, session_factory: async_sessionmaker[AsyncSession], outcome: Outcome
+) -> None:
+    """Writes the final state with a fresh session, whatever happened to the loop's one."""
+    if outcome.stop is not None:
+        if state.length:
+            await state.emit("\n\n")
+        await state.emit(f"_{outcome.stop.message}_")
+
+    async with session_factory() as session:
+        run = await session.get(Run, state.run_id)
+        if run is None:
+            return
+        # Tool calls caught mid-flight by a cancel or a crash must not look as if they ran.
+        await session.execute(
+            update(ToolCall)
+            .where(ToolCall.run_id == run.id, ToolCall.status.in_(("pending", "running")))
+            .values(status="error", result_summary="Stopped", finished_at=datetime.now(UTC))
+        )
+        tool_count = await session.scalar(
+            select(func.count()).select_from(ToolCall).where(ToolCall.run_id == run.id)
+        )
+        run.status = outcome.status
+        run.finished_at = datetime.now(UTC)
+        if outcome.error is not None:
+            run.error = outcome.error.message
+        elif outcome.stop is not None:
+            run.error = outcome.stop.code
+
+        # Keep the bot message if it says something or has tool steps to show.
+        kept = bool(state.text) or bool(tool_count)
+        message = await session.get(Message, state.message_id)
+        if message is not None:
+            if kept:
+                message.content = state.text
+            else:
+                await session.delete(message)
+        chat = await session.get(Chat, state.chat_id)
+        if chat is not None:
+            chat.last_message_at = run.finished_at
+        await session.commit()
+
+    if kept:
+        await state.publish_chat(
+            "message.completed", message_id=str(state.message_id), length=state.length
+        )
+    extra: dict[str, object] = {"message_id": str(state.message_id), "message_kept": kept}
+    if outcome.error is not None:
+        extra["error"] = {"code": outcome.error.code, "message": outcome.error.message}
+    if outcome.stop is not None:
+        extra["stop"] = outcome.stop.code
+    await state.publish_status(outcome.status, **extra)
+    await state.redis.delete(cancel_key(state.run_id))
+
+
+async def _finalize(
+    state: _State,
+    session: AsyncSession,
+    session_factory: async_sessionmaker[AsyncSession],
+    outcome: Outcome,
+) -> None:
+    # The loop's session may have been interrupted mid-query: close it, never reuse it.
+    with contextlib.suppress(Exception):
+        await session.rollback()
+    with contextlib.suppress(Exception):
+        await session.close()
+    await _finish(state, session_factory, outcome)
+
+
+async def run_agent(
+    run_id: uuid.UUID,
+    *,
+    session_factory: async_sessionmaker[AsyncSession],
+    redis: Redis,
+    settings: Settings,
+    llm: LLM | None,
+    registry: ToolRegistry,
+    http: httpx.AsyncClient,
+    llm_error: LLMError | None = None,
+) -> str:
+    """Runs one queued run to its end. Returns the final status."""
+    session = session_factory()
+    try:
+        # Claim the run: only one worker may move it from queued to running.
+        claimed = await session.execute(
+            update(Run)
+            .where(Run.id == run_id, Run.status == "queued")
+            .values(status="running", started_at=datetime.now(UTC))
+            .returning(Run.id)
+        )
+        run = await session.get(Run, run_id, populate_existing=True) if claimed.first() else None
+        bot = await session.get(Bot, run.bot_id) if run is not None else None
+        if run is None or bot is None or run.chat_id is None:
+            await session.rollback()
+            await session.close()
+            log.warning("run.skipped", run_id=str(run_id))
+            return "skipped"
+
+        message = Message(chat_id=run.chat_id, role="bot", bot_id=bot.id, content="", run_id=run.id)
+        session.add(message)
+        await session.commit()
+        await session.refresh(message)
+    except BaseException:
+        await session.close()
+        raise
+
+    state = _State(
+        run_id=run.id,
+        chat_id=run.chat_id,
+        user_id=run.user_id,
+        bot_id=bot.id,
+        message_id=message.id,
+        approval_mode=bot.approval_mode,
+        redis=redis,
+        settings=settings,
+    )
+    await state.publish_status("running")
+    await state.publish_chat(
+        "message.created", message=MessageOut.model_validate(message).model_dump(mode="json")
+    )
+
+    task = asyncio.current_task()
+    assert task is not None
+    watcher = asyncio.create_task(_watch_cancel(state, task))
+    ctx = ToolContext(user_id=run.user_id, run_id=run.id, settings=settings, http=http)
+    try:
+        if llm_error is not None or llm is None:
+            raise llm_error or LLMError("llm_not_configured", GENERIC_ERROR)
+        outcome = await _loop(state, session, run, message, bot, llm, registry, ctx)
+    except asyncio.CancelledError:
+        if not state.cancel_requested:
+            watcher.cancel()
+            await session.close()
+            raise  # the worker itself is shutting down
+        outcome = Outcome("cancelled")
+    except LLMError as error:
+        outcome = Outcome("failed", error=error)
+    except Exception as error:  # the run must always end in a final status
+        log.exception("run.crashed", run_id=str(run_id), error=type(error).__name__)
+        outcome = Outcome("failed", error=LLMError("run_failed", GENERIC_ERROR))
+    watcher.cancel()
+
+    finalize = asyncio.create_task(_finalize(state, session, session_factory, outcome))
+    await _wait_shielded(finalize, state)
+    log.info("run.finished", run_id=str(run_id), status=outcome.status)
+    return outcome.status
