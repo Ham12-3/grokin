@@ -195,7 +195,7 @@ async def test_a_risky_call_never_runs(ctx: Ctx) -> None:
         executed.append(args)
         return ToolOutput("sent", "Sent")
 
-    risky = _tool("email_send", email_send, read_only=False, risk=lambda args: "risky")
+    risky = _tool("email_send", email_send, read_only=False, risk=lambda args, ctx: "risky")
     llm = FakeLLM([Turn([], [_use("email_send", to="sam@example.com")]), Turn(["I could not."])])
     assert await run_worker(ctx, sent["run_id"], llm, registry=_registry(risky)) == "completed"
 
@@ -219,7 +219,7 @@ async def test_never_ask_mode_still_blocks_risky_calls(ctx: Ctx) -> None:
         executed.append(args)
         return ToolOutput("paid", "Paid")
 
-    risky = _tool("pay", pay, read_only=False, risk=lambda args: "risky")
+    risky = _tool("pay", pay, read_only=False, risk=lambda args, ctx: "risky")
     llm = FakeLLM([Turn([], [_use("pay")]), Turn(["no"])])
     await run_worker(ctx, sent["run_id"], llm, registry=_registry(risky))
     assert executed == []
@@ -378,7 +378,9 @@ async def test_cancel_while_streaming_stops_within_two_seconds(ctx: Ctx) -> None
 
     async with Listener(ctx, events.user_channel(user_id), events.chat_channel(chat_id)) as seen:
         worker = asyncio.create_task(run_worker(ctx, sent["run_id"], llm))
-        await asyncio.sleep(0.4)
+        async with asyncio.timeout(20):
+            while llm.chunks_sent < 3:  # wait until it is really streaming
+                await asyncio.sleep(0.02)
         started = time.monotonic()
         resp = await ctx.client.post(f"{API}/runs/{sent['run_id']}/cancel", headers=me)
         assert resp.status_code == 202 and resp.json()["status"] == "running"

@@ -24,6 +24,28 @@ vi.mock("@/features/realtime/connection", () => ({
   subscribeChat: vi.fn(() => () => {}),
 }));
 
+// A stand-in for the noVNC client: records what the Screen tab asks of it.
+const screens: { url: string; protocols: string[]; viewOnly: boolean; closed: boolean }[] = [];
+vi.mock("@novnc/novnc", () => ({
+  default: class FakeRfb extends EventTarget {
+    private readonly record: (typeof screens)[number];
+    scaleViewport = false;
+    constructor(_target: HTMLElement, url: string, options: { wsProtocols: string[] }) {
+      super();
+      this.record = { url, protocols: options.wsProtocols, viewOnly: false, closed: false };
+      screens.push(this.record);
+      queueMicrotask(() => this.dispatchEvent(new Event("connect")));
+    }
+    set viewOnly(value: boolean) {
+      this.record.viewOnly = value;
+    }
+    focus() {}
+    disconnect() {
+      this.record.closed = true;
+    }
+  },
+}));
+
 const mocked = vi.mocked(tauri);
 let emitAuthChanged: (signedIn: boolean) => void = () => {};
 let emitAuthError: (error: tauri.TauriError) => void = () => {};
@@ -84,7 +106,15 @@ function fakeApi(initial: {
   messages?: ReturnType<typeof message>[];
   toolCalls?: (typeof TOOL_CALL)[];
   activeRunId?: string;
+  computer?: string;
 }) {
+  let computerStatus = initial.computer ?? "stopped";
+  const computer = () => ({
+    id: "computer-1",
+    status: computerStatus,
+    provider: "docker",
+    last_active_at: null,
+  });
   const bots = [...(initial.bots ?? [])];
   const messages = [...(initial.messages ?? [])];
   const calls: Call[] = [];
@@ -116,6 +146,18 @@ function fakeApi(initial: {
         tool_calls: initial.toolCalls ?? [],
       });
     }
+    if (path === "/computer") return json(computer());
+    if (path === "/computer/start") {
+      computerStatus = "running";
+      return json(computer());
+    }
+    if (path === "/computer/stop") {
+      computerStatus = "stopped";
+      return json(computer());
+    }
+    if ((path.endsWith("/pause") || path.endsWith("/resume")) && method === "POST") {
+      return json({ run_id: "run-9", status: "running" }, 202);
+    }
     if (path.endsWith("/cancel") && method === "POST") {
       return json({ run_id: "run-9", status: "running" }, 202);
     }
@@ -146,6 +188,7 @@ function fakeApi(initial: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  screens.length = 0;
   resetApiClient();
   resetLive();
   useAuthStore.setState({ status: "loading" });
@@ -382,4 +425,121 @@ test("run details show steps, tools, tokens and duration", async () => {
   expect(within(dialog).getByText("1,234 in, 56 out")).toBeInTheDocument();
   expect(within(dialog).getByText("3.0s")).toBeInTheDocument();
   expect(within(dialog).getByText("Opened example.com")).toBeInTheDocument();
+});
+
+// --- Computer and live screen -------------------------------------------------------------
+
+async function openScreenTab() {
+  fireEvent.click(screen.getByRole("button", { name: "Toggle details" }));
+  const details = await screen.findByRole("complementary", { name: "Details" });
+  fireEvent.click(within(details).getByRole("tab", { name: "Screen" }));
+  return details;
+}
+
+test("the Screen tab starts a stopped computer and then shows the live screen", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT] });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openScreenTab();
+
+  expect(await within(details).findByText(/Off\. It starts by itself/)).toBeInTheDocument();
+  expect(screens).toHaveLength(0); // no connection to a computer that is off
+  fireEvent.click(within(details).getByRole("button", { name: "Start" }));
+
+  expect(await within(details).findByLabelText("Live screen")).toBeInTheDocument();
+  expect(calls.some((call) => call.path === "/computer/start")).toBe(true);
+  await waitFor(() => expect(screens).toHaveLength(1));
+  expect(screens[0].url).toBe("ws://api.test/api/v1/computer/computer-1/vnc?bot_id=bot-1");
+  // The token travels as a subprotocol, never in the URL.
+  expect(screens[0].protocols).toEqual(["binary", "bearer.test-access-token"]);
+  expect(screens[0].url).not.toContain("test-access-token");
+  expect(screens[0].viewOnly).toBe(true); // watching, not controlling
+});
+
+test("Take over pauses the run and gives the user control; Give back resumes it", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({
+    bots: [{ ...BOT, working: true }],
+    activeRunId: "run-9",
+    computer: "running",
+  });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openScreenTab();
+  await within(details).findByLabelText("Live screen");
+  await waitFor(() => expect(screens).toHaveLength(1));
+
+  fireEvent.click(within(details).getByRole("button", { name: "Take over" }));
+  await waitFor(() => expect(calls.some((call) => call.path === "/runs/run-9/pause")).toBe(true));
+  await waitFor(() => expect(screens[0].viewOnly).toBe(false));
+  expect(within(details).getByText(/You are in control/)).toBeInTheDocument();
+
+  fireEvent.click(within(details).getByRole("button", { name: "Give back" }));
+  await waitFor(() => expect(calls.some((call) => call.path === "/runs/run-9/resume")).toBe(true));
+  await waitFor(() => expect(screens[0].viewOnly).toBe(true));
+});
+
+test("a takeover request shows a card that opens the screen with the user in control", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({
+    bots: [{ ...BOT, working: true }],
+    messages: [{ ...message("m2", "bot", "I need you."), run_id: "run-9" }],
+    toolCalls: [
+      {
+        ...TOOL_CALL,
+        tool: "request_takeover",
+        status: "pending", // what the live event carries while the Bot waits
+        summary: "Needs you: Please sign in to GitHub",
+        result_summary: null as unknown as string,
+      },
+    ],
+    activeRunId: "run-9",
+    computer: "running",
+  });
+  render(<App />);
+  await screen.findByRole("log");
+
+  const card = await screen.findByRole("group", { name: "Takeover request" });
+  expect(card).toHaveTextContent("Inbox Bot needs you. Please sign in to GitHub");
+  fireEvent.click(within(card).getByRole("button", { name: "Open screen" }));
+
+  const details = await screen.findByRole("complementary", { name: "Details" });
+  await within(details).findByLabelText("Live screen");
+  await waitFor(() => expect(screens[0]?.viewOnly).toBe(false));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Give back" }));
+  await waitFor(() => expect(calls.some((call) => call.path === "/runs/run-9/resume")).toBe(true));
+  await waitFor(() => expect(screens[0].viewOnly).toBe(true));
+});
+
+test("the chat says when the computer is starting", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({ bots: [{ ...BOT, working: true }], activeRunId: "run-9" });
+  render(<App />);
+  await screen.findByRole("log");
+  act(() => useLiveStore.setState({ computer: "starting" }));
+  expect(screen.getByText("Starting your computer, about 20 seconds...")).toBeInTheDocument();
+  act(() => useLiveStore.setState({ computer: "running" }));
+  expect(screen.queryByText("Starting your computer, about 20 seconds...")).toBeNull();
+});
+
+test("Settings shows the computer and can restart it", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], computer: "running" });
+  render(<App />);
+  await screen.findByRole("log");
+  fireEvent.click(screen.getByRole("button", { name: "Toggle details" }));
+  const details = await screen.findByRole("complementary", { name: "Details" });
+  fireEvent.mouseDown(within(details).getByRole("tab", { name: "Settings" }));
+
+  const section = await within(details).findByRole("region", { name: "Your computer" });
+  expect(within(section).getByRole("status")).toHaveTextContent("Running");
+  fireEvent.click(within(section).getByRole("button", { name: "Restart" }));
+
+  await waitFor(() => {
+    const paths = calls.map((call) => call.path).filter((path) => path.startsWith("/computer/"));
+    expect(paths).toEqual(["/computer/stop", "/computer/start"]);
+  });
+  expect(within(section).getByRole("status")).toHaveTextContent("Running");
 });

@@ -8,7 +8,7 @@ from crew.config import REPO_ROOT, Settings
 def test_defaults_without_env_file() -> None:
     s = Settings(_env_file=None)
     assert s.crew_max_steps == 40
-    assert s.computer_provider == "docker"
+    assert s.computer_image == "crew-computer:dev"
 
 
 def test_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -27,4 +27,4 @@ def test_secrets_hidden_in_repr(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_env_example_parses() -> None:
     s = Settings(_env_file=REPO_ROOT / ".env.example")
     assert s.smtp_url == ""
-    assert s.computer_provider == "docker"
+    assert s.computer_idle_minutes == 10

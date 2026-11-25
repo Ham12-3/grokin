@@ -10,9 +10,13 @@ from crew.llm.base import LLMError, LLMResult, MessageDict, OnDelta, ToolDefinit
 DEFAULT_REPLY = (
     "This is a **test reply** from the fake model, so you can try Crew without an API key.\n\n"
     "- It streams word by word\n- It supports `markdown`\n"
-    "- Send a message with a link and it will read the page and save notes\n\nYou said: "
+    "- Send a message with a link and it will read the page and save notes\n"
+    "- Say `browse` with a link and it opens the page on its computer's screen\n"
+    "- Say `sign in` with a link and it opens the page, then asks you to take over\n\n"
+    "You said: "
 )
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')]+")
+BROWSE_PATTERN = re.compile(r"\b(browse|sign in)\b", re.IGNORECASE)
 
 
 @dataclass
@@ -33,13 +37,18 @@ def _last_text(messages: list[MessageDict]) -> str:
 
 
 def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
-    """Dev behaviour: echo, or read a linked page and save notes (three turns)."""
+    """Dev behaviour: echo, read a linked page and save notes, or use the browser."""
     last = messages[-1] if messages else {"role": "user", "content": ""}
     request = _last_text(messages)
     if isinstance(last["content"], str):
         url = URL_PATTERN.search(request)
         if url is None:
             return Turn([word + " " for word in (DEFAULT_REPLY + request).split(" ")])
+        if BROWSE_PATTERN.search(request):
+            return Turn(
+                ["Opening ", "it ", "in ", "my ", "browser."],
+                [ToolUse(f"fake_{call_number}", "browser_open", {"url": url.group(0)})],
+            )
         return Turn(
             ["Let ", "me ", "read ", "that ", "page."],
             [ToolUse(f"fake_{call_number}", "web_fetch", {"url": url.group(0)})],
@@ -54,6 +63,24 @@ def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
             ["Saving ", "notes."],
             [ToolUse(f"fake_{call_number}", "files_write", {"path": "notes.md", "content": notes})],
         )
+    if previous.get("name") == "browser_open":
+        if "sign in" in request.lower():
+            reason = "Please sign in on this page, then give control back."
+            return Turn(
+                ["I ", "need ", "you ", "for ", "this."],
+                [ToolUse(f"fake_{call_number}", "request_takeover", {"reason": reason})],
+            )
+        return Turn(
+            ["Taking ", "a ", "screenshot."],
+            [ToolUse(f"fake_{call_number}", "browser_screenshot", {})],
+        )
+    if previous.get("name") == "request_takeover":
+        return Turn(
+            ["Thanks. ", "Reading ", "the ", "page ", "again."],
+            [ToolUse(f"fake_{call_number}", "browser_read", {})],
+        )
+    if str(previous.get("name", "")).startswith("browser_"):
+        return Turn(["Done. ", "The ", "page ", "is ", "open ", "on ", "my ", "screen."])
     return Turn(["Done. ", "I ", "saved ", "what ", "I ", "found ", "to ", "`notes.md`."])
 
 
@@ -81,6 +108,7 @@ class FakeLLM:
             self.script = [turn for turn in script if isinstance(turn, Turn)]
         self.delay_seconds = delay_seconds
         self.calls: list[dict[str, Any]] = []
+        self.chunks_sent = 0
 
     async def stream(
         self,
@@ -109,6 +137,7 @@ class FakeLLM:
                 await asyncio.sleep(self.delay_seconds)
             await on_delta(chunk)
             sent.append(chunk)
+            self.chunks_sent += 1
         text = "".join(sent)
         content: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
         content += [

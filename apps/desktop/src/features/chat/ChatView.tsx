@@ -15,9 +15,19 @@ interface ChatViewProps {
   chatId: string;
   working: boolean;
   onToggleDetails: () => void;
+  /** Opens the Screen tab with the user in control. */
+  onOpenScreen: () => void;
+  onGiveBack: (runId: string) => void;
 }
 
-export function ChatView({ bot, chatId, working, onToggleDetails }: ChatViewProps) {
+export function ChatView({
+  bot,
+  chatId,
+  working,
+  onToggleDetails,
+  onOpenScreen,
+  onGiveBack,
+}: ChatViewProps) {
   const messages = useMessages(chatId);
   const sendMessage = useSendMessage(chatId);
   const runError = useLiveStore((state) => state.errors[chatId]);
@@ -27,6 +37,24 @@ export function ChatView({ bot, chatId, working, onToggleDetails }: ChatViewProp
   // After a restart the live store is empty: the newest page knows the run in progress.
   const activeRunId = liveRunId ?? messages.data?.pages[0]?.active_run_id ?? undefined;
   const [stopping, setStopping] = useState(false);
+  const computerStatus = useLiveStore((state) => state.computer);
+  // The Bot asked for help and is waiting: its request_takeover step is still running.
+  const takeover = activeRunId
+    ? toolCalls[activeRunId]?.find(
+        // "pending" is what the live event says; "running" is what a refetch says.
+        (step) =>
+          step.tool === "request_takeover" &&
+          (step.status === "pending" || step.status === "running"),
+      )
+    : undefined;
+
+  // After a restart the live store is empty: remember the run the page told us about.
+  const pageRunId = messages.data?.pages[0]?.active_run_id;
+  useEffect(() => {
+    if (pageRunId && !useLiveStore.getState().runs[chatId]) {
+      useLiveStore.setState((state) => ({ runs: { ...state.runs, [chatId]: pageRunId } }));
+    }
+  }, [pageRunId, chatId]);
 
   async function stop(runId: string) {
     setStopping(true);
@@ -91,6 +119,29 @@ export function ChatView({ bot, chatId, working, onToggleDetails }: ChatViewProp
         />
       )}
 
+      {takeover && activeRunId && (
+        <div
+          role="group"
+          aria-label="Takeover request"
+          className="border-border bg-muted/60 mx-4 mb-2 flex items-center gap-3 rounded-lg border px-3 py-2"
+        >
+          <p className="min-w-0 flex-1 text-sm">
+            <span className="font-medium">{bot.name} needs you. </span>
+            {takeover.summary.replace(/^Needs you: /, "")}
+          </p>
+          <Button size="sm" onClick={onOpenScreen}>
+            Open screen
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => onGiveBack(activeRunId)}>
+            Give back
+          </Button>
+        </div>
+      )}
+      {working && computerStatus === "starting" && (
+        <p role="status" className="text-muted-foreground px-4 pb-1 text-xs">
+          Starting your computer, about 20 seconds...
+        </p>
+      )}
       {error && (
         <p role="alert" className="text-destructive px-4 pb-1 text-xs">
           {error}

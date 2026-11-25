@@ -22,7 +22,7 @@ from crew.db import Base
 from crew.models.base import IdMixin, TimestampMixin
 
 APPROVAL_MODES = ("always_ask", "ask_risky", "never_ask")
-ACTIVE_RUN_STATUSES = ("queued", "running")
+ACTIVE_RUN_STATUSES = ("queued", "running", "paused")
 
 
 class Bot(Base, IdMixin, TimestampMixin):
@@ -118,6 +118,22 @@ class Message(Base, IdMixin, TimestampMixin):
     content: Mapped[str] = mapped_column(Text)
     card: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+
+
+class Computer(Base, IdMixin, TimestampMixin):
+    """The user's one cloud computer."""
+
+    __tablename__ = "computers"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), unique=True
+    )
+    provider: Mapped[str] = mapped_column(Text)  # docker | e2b | local
+    external_id: Mapped[str | None] = mapped_column(Text)
+    # starting | running | paused | stopped | error
+    status: Mapped[str] = mapped_column(Text, server_default=text("'stopped'"))
+    control_token_hash: Mapped[str | None] = mapped_column(Text)
+    last_active_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class UsageDaily(Base):

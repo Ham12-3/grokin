@@ -28,6 +28,8 @@ from crew import events, usage
 from crew.agent.prompts import build_system_prompt
 from crew.approvals import policy
 from crew.budget import BudgetStop, check_budget, step_limit_stop
+from crew.computer.provider import ComputerProvider
+from crew.computer.service import RunComputer
 from crew.config import Settings
 from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
 from crew.models import Bot, Chat, Message, Run, ToolCall
@@ -54,6 +56,19 @@ def cancel_key(run_id: uuid.UUID | str) -> str:
 async def request_cancel(redis: Redis, run_id: uuid.UUID) -> None:
     """Asks the worker to stop a run. It notices within `cancel_poll_seconds`."""
     await redis.set(cancel_key(run_id), "1", ex=3600)
+
+
+def pause_key(run_id: uuid.UUID | str) -> str:
+    return f"run:{run_id}:pause"
+
+
+async def request_pause(redis: Redis, run_id: uuid.UUID, reason: str, ttl_seconds: int) -> None:
+    """Asks the worker to wait. It pauses before its next step or tool."""
+    await redis.set(pause_key(run_id), reason[:300], ex=ttl_seconds)
+
+
+async def request_resume(redis: Redis, run_id: uuid.UUID) -> None:
+    await redis.delete(pause_key(run_id))
 
 
 @dataclass
@@ -172,19 +187,53 @@ async def _wait_shielded(task: asyncio.Task[None], state: _State) -> None:
                 return
 
 
+TAKEOVER_PREFIX = "takeover:"
+HEARTBEAT_SECONDS = 20.0
+
+
+async def _wait_while_paused(state: _State, session: AsyncSession, run: Run) -> None:
+    """Holds the run while a pause is in place (Take over, or the Bot asking for help)."""
+    reason = await state.redis.get(pause_key(state.run_id))
+    if reason is None:
+        return
+    takeover = reason.startswith(TAKEOVER_PREFIX)
+    run.status = "paused"
+    await session.commit()
+    await state.publish_status(
+        "paused", takeover=takeover, reason=reason.removeprefix(TAKEOVER_PREFIX)
+    )
+    deadline = time.monotonic() + state.settings.takeover_timeout_seconds
+    beat = time.monotonic()
+    while await state.redis.exists(pause_key(state.run_id)):
+        if time.monotonic() > deadline:
+            await state.redis.delete(pause_key(state.run_id))
+            break
+        if time.monotonic() - beat > HEARTBEAT_SECONDS:
+            # Shows the run is alive, so the chat does not treat it as dead.
+            run.updated_at = datetime.now(UTC)
+            await session.commit()
+            beat = time.monotonic()
+        await asyncio.sleep(state.settings.cancel_poll_seconds)
+    run.status = "running"
+    await session.commit()
+    await state.publish_status("running")
+
+
 async def _run_tool(
     state: _State,
     session: AsyncSession,
+    run: Run,
     registry: ToolRegistry,
     ctx: ToolContext,
     step: int,
     use: ToolUse,
 ) -> dict[str, Any]:
     """Records, checks and runs one tool call. Returns the tool_result block for the LLM."""
+    await _wait_while_paused(state, session, run)
     tool = registry.get(use.name)
     args: dict[str, Any] = use.input if isinstance(use.input, dict) else {}
     invalid = None if tool is None else validation_message(tool, use.input)
-    risk = tool.risk(args) if tool is not None and invalid is None else "safe"
+    risk = tool.risk(args, ctx) if tool is not None and invalid is None else "safe"
     summary = tool.summary(args) if tool is not None else f"Tried an unknown tool: {use.name[:40]}"
 
     # Written BEFORE anything runs.
@@ -281,10 +330,12 @@ async def _loop(
         # Save the partial text now and then, so a reconnecting client can catch up.
         if time.monotonic() - state.last_saved >= settings.partial_save_seconds:
             message.content = state.text
+            run.updated_at = datetime.now(UTC)  # heartbeat for long replies
             await session.commit()
             state.last_saved = time.monotonic()
 
     for step in range(settings.crew_max_steps):
+        await _wait_while_paused(state, session, run)
         stop = await check_budget(session, settings, run, state.user_id)
         if stop is not None:
             return Outcome("completed", stop=stop)
@@ -315,7 +366,8 @@ async def _loop(
             return Outcome("completed")
 
         results = [
-            await _run_tool(state, session, registry, ctx, step, use) for use in result.tool_uses
+            await _run_tool(state, session, run, registry, ctx, step, use)
+            for use in result.tool_uses
         ]
         tool_message: MessageDict = {"role": "user", "content": results}
         messages.append(tool_message)
@@ -378,7 +430,7 @@ async def _finish(
     if outcome.stop is not None:
         extra["stop"] = outcome.stop.code
     await state.publish_status(outcome.status, **extra)
-    await state.redis.delete(cancel_key(state.run_id))
+    await state.redis.delete(cancel_key(state.run_id), pause_key(state.run_id))
 
 
 async def _finalize(
@@ -386,7 +438,11 @@ async def _finalize(
     session: AsyncSession,
     session_factory: async_sessionmaker[AsyncSession],
     outcome: Outcome,
+    computer: RunComputer,
 ) -> None:
+    # Give the screen back, whatever happened.
+    with contextlib.suppress(Exception):
+        await computer.close()
     # The loop's session may have been interrupted mid-query: close it, never reuse it.
     with contextlib.suppress(Exception):
         await session.rollback()
@@ -404,6 +460,7 @@ async def run_agent(
     llm: LLM | None,
     registry: ToolRegistry,
     http: httpx.AsyncClient,
+    provider: ComputerProvider,
     llm_error: LLMError | None = None,
 ) -> str:
     """Runs one queued run to its end. Returns the final status."""
@@ -450,7 +507,22 @@ async def run_agent(
     task = asyncio.current_task()
     assert task is not None
     watcher = asyncio.create_task(_watch_cancel(state, task))
-    ctx = ToolContext(user_id=run.user_id, run_id=run.id, settings=settings, http=http)
+    computer = RunComputer(session_factory, redis, provider, settings, run.user_id, run.id, bot.id)
+
+    async def takeover(reason: str) -> None:
+        await request_pause(
+            redis, run.id, f"{TAKEOVER_PREFIX}{reason}", settings.takeover_timeout_seconds + 60
+        )
+        await _wait_while_paused(state, session, run)
+
+    ctx = ToolContext(
+        user_id=run.user_id,
+        run_id=run.id,
+        settings=settings,
+        http=http,
+        computer=computer,
+        takeover=takeover,
+    )
     try:
         if llm_error is not None or llm is None:
             raise llm_error or LLMError("llm_not_configured", GENERIC_ERROR)
@@ -468,7 +540,7 @@ async def run_agent(
         outcome = Outcome("failed", error=LLMError("run_failed", GENERIC_ERROR))
     watcher.cancel()
 
-    finalize = asyncio.create_task(_finalize(state, session, session_factory, outcome))
+    finalize = asyncio.create_task(_finalize(state, session, session_factory, outcome, computer))
     await _wait_shielded(finalize, state)
     log.info("run.finished", run_id=str(run_id), status=outcome.status)
     return outcome.status

@@ -50,6 +50,7 @@ os.environ.update(
         "WORKSPACES_DIR": tempfile.mkdtemp(prefix="crew-test-workspaces-"),
         "SEARCH_API_KEY": "",
         "LLM_PROVIDER": "anthropic",
+        "COMPUTER_PROVIDER": "local",
     }
 )
 
@@ -57,6 +58,7 @@ from alembic import command  # noqa: E402
 from alembic.config import Config  # noqa: E402
 
 from api.main import create_app  # noqa: E402
+from crew.computer.local_provider import LocalProvider  # noqa: E402
 from crew.config import Settings, get_settings  # noqa: E402
 
 SERVICES_DIR = Path(__file__).resolve().parents[1]
@@ -173,7 +175,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
         await conn.execute(
             text(
                 "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
-                "messages, runs, tool_calls, usage_daily CASCADE"
+                "messages, runs, tool_calls, usage_daily, computers CASCADE"
             )
         )
 
@@ -188,6 +190,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     queue = RecordingQueue()
     app.state.session_factory = session_factory
     app.state.queue = queue
+    app.state.provider = LocalProvider(settings)
     app.state.redis = redis
     app.state.http = http
     app.state.mailer = mailer
@@ -207,7 +210,7 @@ async def live_ws(ctx: Ctx) -> AsyncIterator[str]:
     config = uvicorn.Config(ctx.app, host="127.0.0.1", port=0, lifespan="off", log_level="warning")
     server = uvicorn.Server(config)
     task = asyncio.create_task(server.serve())
-    while not server.started:  # noqa: ASYNC110
+    while not server.started:
         await asyncio.sleep(0.01)
     port = server.servers[0].sockets[0].getsockname()[1]
     yield f"ws://127.0.0.1:{port}/api/v1/ws"

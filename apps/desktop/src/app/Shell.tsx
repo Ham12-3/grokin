@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { DetailsPane } from "./DetailsPane";
+import { DetailsPane, type DetailsTab } from "./DetailsPane";
 import { Sidebar } from "./Sidebar";
 import { Button } from "@/components/ui/button";
 import { NewBotDialog } from "@/features/bots/NewBotDialog";
 import { useBots, type Bot } from "@/features/bots/api";
 import { ChatView } from "@/features/chat/ChatView";
+import { resumeRun } from "@/features/computer/api";
 import { startRealtime } from "@/features/realtime/connection";
 import { useLiveStore } from "@/features/realtime/live";
 import { apiFetch, type Schemas } from "@/lib/api/client";
@@ -21,8 +22,12 @@ export function Shell() {
   });
   const status = useLiveStore((state) => state.status);
   const liveWorking = useLiveStore((state) => state.working);
+  const liveRuns = useLiveStore((state) => state.runs);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [detailsOpen, setDetailsOpen] = useState(false);
+  const [detailsTab, setDetailsTab] = useState<DetailsTab>("settings");
+  // True while the user is in control of the screen (Take over).
+  const [interactive, setInteractive] = useState(false);
   const [newBotOpen, setNewBotOpen] = useState(false);
 
   useEffect(() => startRealtime(queryClient), [queryClient]);
@@ -31,6 +36,27 @@ export function Shell() {
   // Fall back to the first Bot (the Primary Bot is listed first).
   const selected = list.find((bot) => bot.id === selectedId) ?? list[0] ?? null;
   const isWorking = (bot: Bot) => liveWorking[bot.id] ?? bot.working;
+  const activeRunId = selected?.direct_chat_id ? liveRuns[selected.direct_chat_id] : undefined;
+
+  function select(botId: string | null) {
+    setSelectedId(botId);
+    setInteractive(false); // control never carries over to another Bot's screen
+  }
+
+  function openScreen() {
+    setDetailsOpen(true);
+    setDetailsTab("screen");
+    setInteractive(true);
+  }
+
+  async function giveBack(runId: string) {
+    setInteractive(false);
+    try {
+      await resumeRun(runId);
+    } catch {
+      // The run may have just ended; the next status event settles it.
+    }
+  }
 
   return (
     <div className="bg-background text-foreground flex h-screen flex-col">
@@ -45,7 +71,7 @@ export function Shell() {
           selectedId={selected?.id ?? null}
           isWorking={isWorking}
           userLabel={me.data?.name ?? me.data?.email ?? ""}
-          onSelect={setSelectedId}
+          onSelect={select}
           onNewBot={() => setNewBotOpen(true)}
           onSignOut={() => void authLogout()}
         />
@@ -79,14 +105,25 @@ export function Shell() {
             chatId={selected.direct_chat_id}
             working={isWorking(selected)}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
+            onOpenScreen={openScreen}
+            onGiveBack={(runId) => void giveBack(runId)}
           />
         )}
         {selected && detailsOpen && (
-          <DetailsPane key={selected.id} bot={selected} onDeleted={() => setSelectedId(null)} />
+          <DetailsPane
+            key={selected.id}
+            bot={selected}
+            tab={detailsTab}
+            onTabChange={setDetailsTab}
+            activeRunId={activeRunId}
+            interactive={interactive}
+            onInteractiveChange={setInteractive}
+            onDeleted={() => select(null)}
+          />
         )}
       </div>
 
-      <NewBotDialog open={newBotOpen} onOpenChange={setNewBotOpen} onCreated={setSelectedId} />
+      <NewBotDialog open={newBotOpen} onOpenChange={setNewBotOpen} onCreated={select} />
     </div>
   );
 }

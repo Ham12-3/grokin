@@ -90,9 +90,17 @@ class Settings(BaseSettings):
     smtp_url: str = Field(default="", repr=False)
 
     # Cloud computer
-    computer_provider: Literal["docker", "e2b"] = "docker"
+    computer_provider: Literal["docker", "e2b", "local"] = "docker"
     computer_image: str = "crew-computer:dev"
     computer_idle_minutes: int = 10
+    computer_memory: str = "3g"
+    computer_cpus: float = 2.0
+    computer_pids_limit: int = 1024
+    # Signs each computer's control token. Falls back to JWT_SECRET when empty.
+    computer_token_secret: str = Field(default="", repr=False)
+    display_claim_seconds: int = 3600
+    takeover_timeout_seconds: int = 1800
+    terminal_max_seconds: int = 300
     e2b_api_key: str = Field(default="", repr=False)
 
     # Connectors

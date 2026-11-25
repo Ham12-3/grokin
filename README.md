@@ -11,6 +11,7 @@ You need Docker Desktop (running), Rust, Node 20+, pnpm, uv and make.
 ```
 cp .env.example .env      # then set JWT_SECRET (32+ random characters)
 make up                   # Postgres and Redis
+make computer-image       # build the Bots' computer image (once, about 10 minutes)
 make migrate              # database migrations
 make api                  # API on http://localhost:8000
 make worker               # background worker

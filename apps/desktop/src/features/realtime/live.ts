@@ -14,6 +14,7 @@ import {
   type Message,
   type ToolCall,
 } from "@/features/chat/api";
+import { computerKey, type Computer, type ComputerStatus } from "@/features/computer/api";
 import type { ServerEvent, WsStatus } from "@/lib/ws";
 
 interface LiveStore {
@@ -26,6 +27,8 @@ interface LiveStore {
   errors: Record<string, string>;
   /** The run in progress by chat id, so it can be stopped. */
   runs: Record<string, string>;
+  /** The computer's status as last announced. Missing means "ask the API". */
+  computer: ComputerStatus | undefined;
 }
 
 export const useLiveStore = create<LiveStore>(() => ({
@@ -34,6 +37,7 @@ export const useLiveStore = create<LiveStore>(() => ({
   working: {},
   errors: {},
   runs: {},
+  computer: undefined,
 }));
 
 const initialState = useLiveStore.getState();
@@ -125,7 +129,8 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
       const status = str(event.status);
       const botId = str(event.bot_id);
       const runId = str(event.run_id);
-      const active = status === "queued" || status === "running";
+      // A paused run (Take over) is still in progress.
+      const active = status === "queued" || status === "running" || status === "paused";
       useLiveStore.setState((state) => {
         const runs = { ...state.runs };
         if (active) runs[chatId] = runId;
@@ -154,6 +159,14 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
       }
       break;
     }
+    case "computer.status": {
+      const computerStatus = str(event.status) as ComputerStatus;
+      useLiveStore.setState({ computer: computerStatus });
+      queryClient.setQueryData<Computer>(computerKey, (computer) =>
+        computer ? { ...computer, status: computerStatus } : computer,
+      );
+      break;
+    }
     default:
       break;
   }
@@ -161,7 +174,8 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
 
 /** After a reconnect: drop live text and refetch, so nothing is lost or doubled. */
 export function handleReconnected(queryClient: QueryClient): void {
-  useLiveStore.setState({ streaming: {}, working: {}, runs: {} });
+  useLiveStore.setState({ streaming: {}, working: {}, runs: {}, computer: undefined });
+  void queryClient.invalidateQueries({ queryKey: computerKey });
   lastResync.clear();
   void queryClient.invalidateQueries({ queryKey: ["bots"] });
   void queryClient.invalidateQueries({ queryKey: ["messages"] });

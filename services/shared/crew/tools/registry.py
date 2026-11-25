@@ -10,12 +10,13 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Literal
+from typing import Any, Literal, Protocol
 
 import httpx
 import jsonschema
 import structlog
 
+from crew.computer.provider import ComputerHandle, ComputerProvider
 from crew.config import Settings
 
 log = structlog.get_logger(__name__)
@@ -30,12 +31,30 @@ class ToolError(Exception):
     """A failure the model is told about. The message must be safe to show."""
 
 
+Takeover = Callable[[str], Awaitable[None]]
+
+
+class ComputerAccess(Protocol):
+    """The user's computer as a tool sees it (see `crew.computer.service.RunComputer`)."""
+
+    provider: ComputerProvider
+    element_labels: dict[int, str]
+
+    async def handle(self) -> ComputerHandle: ...
+
+    async def display(self) -> int: ...
+
+
 @dataclass(frozen=True)
 class ToolContext:
     user_id: uuid.UUID
     run_id: uuid.UUID
     settings: Settings
     http: httpx.AsyncClient
+    # The user's computer for this run: started on first use.
+    computer: ComputerAccess
+    # Pauses the run until the user gives control back (see `request_takeover`).
+    takeover: Takeover
 
 
 @dataclass(frozen=True)
@@ -56,7 +75,7 @@ class ToolResult:
     summary: str
 
 
-def _always_safe(_: Args) -> Risk:
+def _always_safe(_: Args, __: ToolContext) -> Risk:
     return "safe"
 
 
@@ -68,7 +87,7 @@ class Tool:
     handler: Callable[[Args, ToolContext], Awaitable[ToolOutput]]
     summary: Callable[[Args], str]
     read_only: bool
-    risk: Callable[[Args], Risk] = _always_safe
+    risk: Callable[[Args, ToolContext], Risk] = _always_safe
     timeout_seconds: float = 30.0
     max_output_chars: int = 20_000
 
