@@ -10,6 +10,7 @@ import type { Approval } from "@/features/approvals/api";
 import type { Bot } from "@/features/bots/api";
 import { StatusDot } from "@/features/bots/StatusDot";
 import { subscribeChat } from "@/features/realtime/connection";
+import { useSkills } from "@/features/skills/api";
 import { clearChatError, dropChatStreaming, useLiveStore } from "@/features/realtime/live";
 import { errorMessage } from "@/lib/tauri";
 
@@ -23,6 +24,8 @@ interface ChatViewProps {
   /** Opens the Screen tab with the user in control. */
   onOpenScreen: () => void;
   onGiveBack: (runId: string) => void;
+  /** Opens another Bot's chat (from a handoff note). */
+  onOpenBot: (botId: string) => void;
 }
 
 export function ChatView({
@@ -33,7 +36,9 @@ export function ChatView({
   onToggleDetails,
   onOpenScreen,
   onGiveBack,
+  onOpenBot,
 }: ChatViewProps) {
+  const skills = useSkills(bot.id);
   const messages = useMessages(chatId);
   const sendMessage = useSendMessage(chatId);
   const runError = useLiveStore((state) => state.errors[chatId]);
@@ -129,6 +134,7 @@ export function ChatView({
           hasOlder={messages.hasNextPage}
           loadingOlder={messages.isFetchingNextPage}
           onLoadOlder={loadOlder}
+          onOpenBot={onOpenBot}
         />
       )}
 
@@ -171,9 +177,10 @@ export function ChatView({
         botName={bot.name}
         busy={working || sendMessage.isPending}
         onStop={working && activeRunId && !stopping ? () => void stop(activeRunId) : undefined}
-        onSend={(text) => {
+        skills={skills.data}
+        onSend={(text, skillId) => {
           clearChatError(chatId);
-          sendMessage.mutate(text);
+          sendMessage.mutate({ content: text, skillId });
         }}
       />
     </section>

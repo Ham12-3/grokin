@@ -35,9 +35,10 @@ from crew.computer.provider import ComputerProvider
 from crew.computer.service import RunComputer
 from crew.config import Settings
 from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
-from crew.models import Approval, Bot, Chat, Message, Run, ToolCall
+from crew.models import Approval, Bot, Chat, Memory, Message, Run, Skill, ToolCall
 from crew.schemas.chat import MessageOut
 from crew.schemas.run import ToolCallOut
+from crew.tools.handoff import NAME as HANDOFF
 from crew.tools.registry import (
     Tool,
     ToolContext,
@@ -439,8 +440,31 @@ async def _loop(
     ctx: ToolContext,
 ) -> Outcome:
     settings = state.settings
-    system = build_system_prompt(bot)
-    tools = registry.definitions(bot.enabled_tools)
+    memories = (
+        await session.scalars(select(Memory).where(Memory.bot_id == bot.id).order_by(Memory.id))
+    ).all()
+    skills = (
+        await session.scalars(select(Skill).where(Skill.bot_id == bot.id).order_by(Skill.name))
+    ).all()
+    invoked = next((skill for skill in skills if skill.id == run.skill_id), None)
+    other_bots: list[Bot] = []
+    if bot.is_primary:
+        other_bots = list(
+            (
+                await session.scalars(
+                    select(Bot).where(Bot.user_id == bot.user_id, Bot.id != bot.id).order_by(Bot.id)
+                )
+            ).all()
+        )
+    system = build_system_prompt(
+        bot, memories=memories, skills=skills, invoked=invoked, other_bots=other_bots
+    )
+    # Only the Primary Bot, and only when there is someone to hand to, gets `handoff`.
+    tools = [
+        definition
+        for definition in registry.definitions(bot.enabled_tools)
+        if definition["name"] != HANDOFF or other_bots
+    ]
     transcript: list[MessageDict] = list(run.transcript)
     messages = await _history(session, settings, state.chat_id, state.message_id) + transcript
     if not messages:
@@ -601,8 +625,13 @@ async def run_agent(
     http: httpx.AsyncClient,
     provider: ComputerProvider,
     llm_error: LLMError | None = None,
+    queue: Any = None,
 ) -> str:
-    """Runs one queued run to its end. Returns the final status."""
+    """Runs one queued run to its end. Returns the final status.
+
+    `queue` (anything with `enqueue_job`) lets tools start other jobs: a handoff's run,
+    tidying memory.
+    """
     session = session_factory()
     try:
         # Claim the run: only one worker may move it from queued to running.
@@ -675,6 +704,10 @@ async def run_agent(
         computer=computer,
         takeover=takeover,
         session_factory=session_factory,
+        bot_id=bot.id,
+        chat_id=run.chat_id,
+        redis=redis,
+        queue=queue,
     )
     try:
         if llm_error is not None or llm is None:

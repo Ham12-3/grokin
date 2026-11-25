@@ -224,6 +224,7 @@ async def run_worker(
             http=http,
             provider=provider or ctx.app.state.provider,
             llm_error=llm_error,
+            queue=ctx.queue,
         )
 
 

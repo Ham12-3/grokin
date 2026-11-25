@@ -80,6 +80,7 @@ const message = (id: string, role: string, content: string) => ({
   role,
   bot_id: role === "bot" ? "bot-1" : null,
   content,
+  card: null as Record<string, unknown> | null,
   run_id: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
 });
@@ -123,7 +124,20 @@ const APPROVAL = {
   resolved_at: null,
 };
 
+const SKILL = {
+  id: "s1",
+  bot_id: "bot-1",
+  slug: "weekly-report",
+  name: "Weekly Report",
+  description: "Summarise the week",
+  steps: "1. Read notes.md",
+  rules: "",
+  created_at: "2026-01-01T00:00:00Z",
+};
+
 function fakeApi(initial: {
+  memory?: string[];
+  skills?: (typeof SKILL)[];
   approvals?: (typeof APPROVAL)[];
   bots?: (typeof BOT)[];
   messages?: ReturnType<typeof message>[];
@@ -140,6 +154,13 @@ function fakeApi(initial: {
   });
   const bots = [...(initial.bots ?? [])];
   const approvals = [...(initial.approvals ?? [])];
+  const skills = [...(initial.skills ?? [])];
+  const memory = (initial.memory ?? []).map((text, index) => ({
+    id: `mem-${index + 1}`,
+    bot_id: "bot-1",
+    text,
+    created_at: "2026-01-01T00:00:00Z",
+  }));
   const messages = [...(initial.messages ?? [])];
   const calls: Call[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -152,6 +173,42 @@ function fakeApi(initial: {
       return json({ email: "sam@example.com", name: "Sam", daily_token_budget: 1 });
     }
     if (path === "/bots" && method === "GET") return json(bots);
+    if (path.endsWith("/memory") && method === "GET") return json(memory);
+    if (path.endsWith("/memory") && method === "POST") {
+      const line = { ...memory[0], id: "mem-new", text: (body as { text: string }).text };
+      memory.push(line);
+      return json(line, 201);
+    }
+    if (path.includes("/memory/")) {
+      const index = memory.findIndex((line) => path.endsWith(line.id));
+      if (method === "DELETE") {
+        memory.splice(index, 1);
+        return new Response(null, { status: 204 });
+      }
+      memory[index] = { ...memory[index], text: (body as { text: string }).text };
+      return json(memory[index]);
+    }
+    if (path.endsWith("/skills") && method === "GET") return json(skills);
+    if (path.endsWith("/skills") && method === "POST") {
+      const created = { ...SKILL, ...(body as object), id: "s-new", slug: "new-skill" };
+      skills.push(created);
+      return json(created, 201);
+    }
+    if (path.startsWith("/skills/") && method === "DELETE") {
+      skills.splice(0, skills.length);
+      return new Response(null, { status: 204 });
+    }
+    if (path.includes("/skill-drafts/") && method === "POST") {
+      const [, , , , id, action] = path.split("/");
+      const index = messages.findIndex((item) => item.id === id);
+      const status = action === "save" ? "saved" : "cancelled";
+      messages[index] = {
+        ...messages[index],
+        card: { ...messages[index].card, status, slug: "weekly-report" },
+      };
+      if (action === "save") skills.push(SKILL);
+      return json(messages[index]);
+    }
     if (path.startsWith("/approvals") && method === "GET") return json(approvals);
     if (path.startsWith("/approvals/") && method === "POST") {
       const [, , id, action] = path.split("/");
@@ -354,7 +411,7 @@ test("sending a message posts it and shows it once", async () => {
   expect(within(log).getAllByText("What is on today?")).toHaveLength(1);
   const post = calls.find((call) => call.method === "POST");
   expect(post?.path).toBe("/chats/chat-1/messages");
-  expect(post?.body).toEqual({ content: "What is on today?" });
+  expect(post?.body).toEqual({ content: "What is on today?", skill_id: null });
 });
 
 test("streaming text, the working dot and run errors show in the chat", async () => {
@@ -730,4 +787,165 @@ test("the tray menu or a notification opens the Approvals screen", async () => {
 
   const page = await screen.findByRole("region", { name: "Approvals" });
   expect(await within(page).findByText("Nothing is waiting for you.")).toBeInTheDocument();
+});
+
+// --- Memory and skills ------------------------------------------------------------------
+
+async function openTab(name: string) {
+  fireEvent.click(screen.getByRole("button", { name: "Toggle details" }));
+  const details = await screen.findByRole("complementary", { name: "Details" });
+  fireEvent.click(within(details).getByRole("tab", { name }));
+  return details;
+}
+
+test("the Memory tab lists lines and lets the user add, edit and delete them", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], memory: ["Prefers short bullet summaries"] });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openTab("Memory");
+  const list = await within(details).findByRole("list", { name: "Memory" });
+  expect(await within(list).findByText("Prefers short bullet summaries")).toBeInTheDocument();
+
+  fireEvent.change(within(details).getByLabelText("New memory line"), {
+    target: { value: "Lives in Lagos" },
+  });
+  fireEvent.click(within(details).getByRole("button", { name: "Add line" }));
+  expect(await within(list).findByText("Lives in Lagos")).toBeInTheDocument();
+
+  fireEvent.click(within(list).getByRole("button", { name: "Edit: Lives in Lagos" }));
+  fireEvent.change(within(list).getByLabelText("Memory line"), {
+    target: { value: "Lives in Abuja" },
+  });
+  fireEvent.click(within(list).getByRole("button", { name: "Save line" }));
+  expect(await within(list).findByText("Lives in Abuja")).toBeInTheDocument();
+
+  fireEvent.click(
+    within(list).getByRole("button", { name: "Delete: Prefers short bullet summaries" }),
+  );
+  await waitFor(() =>
+    expect(within(list).queryByText("Prefers short bullet summaries")).not.toBeInTheDocument(),
+  );
+  expect(
+    calls
+      .filter((call) => call.method !== "GET" && call.path.includes("/memory"))
+      .map((call) => [call.method, call.path, call.body]),
+  ).toEqual([
+    ["POST", "/bots/bot-1/memory", { text: "Lives in Lagos" }],
+    ["PATCH", "/bots/bot-1/memory/mem-new", { text: "Lives in Abuja" }],
+    ["DELETE", "/bots/bot-1/memory/mem-1", undefined],
+  ]);
+});
+
+test("the Skills tab creates a skill and runs one now", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], skills: [SKILL] });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openTab("Skills");
+  expect(await within(details).findByText("/weekly-report")).toBeInTheDocument();
+
+  fireEvent.click(within(details).getByRole("button", { name: "New skill" }));
+  const dialog = await screen.findByRole("dialog");
+  const save = within(dialog).getByRole("button", { name: "Save skill" });
+  expect(save).toBeDisabled(); // a skill needs a name and steps
+  fireEvent.change(within(dialog).getByLabelText("Name"), { target: { value: "New Skill" } });
+  fireEvent.change(within(dialog).getByLabelText("Steps (markdown)"), {
+    target: { value: "1. Do it" },
+  });
+  fireEvent.click(save);
+  expect(await within(details).findByText("/new-skill")).toBeInTheDocument();
+
+  fireEvent.click(within(details).getByRole("button", { name: "Run Weekly Report now" }));
+  await waitFor(() =>
+    expect(
+      calls.find((call) => call.path === "/chats/chat-1/messages" && call.method === "POST")?.body,
+    ).toEqual({
+      content: "/weekly-report",
+      skill_id: "s1",
+    }),
+  );
+});
+
+test("typing / in the composer picks a skill and sends it with the message", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const other = { ...SKILL, id: "s2", slug: "inbox-zero", name: "Inbox Zero", description: "" };
+  const calls = fakeApi({ bots: [BOT], skills: [SKILL, other] });
+  render(<App />);
+  await screen.findByRole("log");
+  const box = screen.getByLabelText("Message Inbox Bot");
+
+  fireEvent.change(box, { target: { value: "/" } });
+  const picker = await screen.findByRole("listbox", { name: "Skills" });
+  await waitFor(() => expect(within(picker).getAllByRole("option")).toHaveLength(2));
+  fireEvent.change(box, { target: { value: "/week" } }); // search
+  expect(within(picker).getAllByRole("option")).toHaveLength(1);
+  fireEvent.keyDown(box, { key: "Enter" }); // picks, does not send
+  expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+  expect(calls.some((call) => call.method === "POST")).toBe(false);
+
+  fireEvent.change(box, { target: { value: "for last week" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await waitFor(() =>
+    expect(calls.find((call) => call.method === "POST")?.body).toEqual({
+      content: "/weekly-report for last week",
+      skill_id: "s1",
+    }),
+  );
+});
+
+test("a skill draft card saves the skill only when the user clicks Save", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const draft = {
+    ...message("m-draft", "system", ""),
+    bot_id: "bot-1",
+    card: {
+      type: "skill_draft",
+      status: "draft",
+      name: "Weekly Report",
+      description: "Summarise the week",
+      steps: "1. Read notes.md",
+      rules: "",
+    },
+  };
+  const calls = fakeApi({ bots: [BOT], messages: [message("m1", "user", "save that"), draft] });
+  render(<App />);
+  const card = await screen.findByRole("article", { name: "Skill draft: Weekly Report" });
+  expect(within(card).getByText("1. Read notes.md")).toBeInTheDocument();
+  expect(calls.some((call) => call.method === "POST")).toBe(false);
+
+  fireEvent.click(within(card).getByRole("button", { name: "Save skill" }));
+
+  expect(await within(card).findByRole("status")).toHaveTextContent("/weekly-report");
+  expect(within(card).queryByRole("button", { name: "Save skill" })).not.toBeInTheDocument();
+  expect(calls.find((call) => call.method === "POST")?.path).toBe(
+    "/chats/chat-1/skill-drafts/m-draft/save",
+  );
+});
+
+test("a handoff note opens the other Bot's chat, which shows who passed the task on", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const research = {
+    ...BOT,
+    id: "bot-2",
+    name: "Research Bot",
+    is_primary: false,
+    direct_chat_id: "chat-2",
+  };
+  const note = {
+    ...message("m-note", "system", "Passed to Research Bot"),
+    card: { type: "handoff", bot_id: "bot-2", bot_name: "Research Bot", chat_id: "chat-2" },
+  };
+  const task = {
+    ...message("m-task", "user", "Research Tauri"),
+    card: { type: "handoff_from", bot_id: "bot-1", bot_name: "Inbox Bot", chat_id: "chat-1" },
+  };
+  fakeApi({ bots: [BOT, research], messages: [note, task] });
+  render(<App />);
+  await screen.findByRole("log");
+
+  fireEvent.click(await screen.findByRole("button", { name: /Passed to Research Bot/ }));
+
+  expect(await screen.findByRole("heading", { name: /Research Bot/ })).toBeInTheDocument();
+  expect(await screen.findByRole("button", { name: "Passed on by Inbox Bot" })).toBeInTheDocument();
 });

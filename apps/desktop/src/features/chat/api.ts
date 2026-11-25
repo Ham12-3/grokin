@@ -129,10 +129,10 @@ export function cancelRun(runId: string) {
 export function useSendMessage(chatId: string) {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (content: string) =>
+    mutationFn: (message: { content: string; skillId?: string }) =>
       apiFetch<Schemas["SendMessageResponse"]>(`/chats/${chatId}/messages`, {
         method: "POST",
-        body: JSON.stringify({ content }),
+        body: JSON.stringify({ content: message.content, skill_id: message.skillId ?? null }),
       }),
     // The WebSocket also announces the message; upsert keeps a single copy.
     onSuccess: (sent) => upsertMessage(queryClient, sent.message),

@@ -16,6 +16,7 @@ from crew.schemas.chat import (
     SendMessageResponse,
 )
 from crew.schemas.run import ToolCallOut
+from crew.skills import service as skills
 
 router = APIRouter(prefix="/chats", tags=["chats"])
 
@@ -61,6 +62,38 @@ async def send_message(
     settings: SettingsDep,
 ) -> SendMessageResponse:
     message, run_id = await service.send_message(
-        session, redis, queue, settings, user.id, chat_id, content=body.content
+        session,
+        redis,
+        queue,
+        settings,
+        user.id,
+        chat_id,
+        content=body.content,
+        skill_id=body.skill_id,
     )
     return SendMessageResponse(message=MessageOut.model_validate(message), run_id=run_id)
+
+
+@router.post("/{chat_id}/skill-drafts/{message_id}/save", response_model=MessageOut)
+async def save_skill_draft(
+    chat_id: uuid.UUID,
+    message_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    redis: RedisDep,
+) -> MessageOut:
+    """The user accepts a skill the Bot drafted. Only this creates the skill."""
+    message = await skills.save_draft(session, redis, user.id, chat_id, message_id)
+    return MessageOut.model_validate(message)
+
+
+@router.post("/{chat_id}/skill-drafts/{message_id}/cancel", response_model=MessageOut)
+async def cancel_skill_draft(
+    chat_id: uuid.UUID,
+    message_id: uuid.UUID,
+    user: CurrentUser,
+    session: SessionDep,
+    redis: RedisDep,
+) -> MessageOut:
+    message = await skills.cancel_draft(session, redis, user.id, chat_id, message_id)
+    return MessageOut.model_validate(message)

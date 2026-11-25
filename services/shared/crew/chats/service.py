@@ -3,7 +3,7 @@
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Protocol
+from typing import Any, Protocol
 
 from redis.asyncio import Redis
 from sqlalchemy import select
@@ -13,7 +13,7 @@ from crew import events
 from crew.bots.service import load_bot
 from crew.config import Settings
 from crew.errors import AppError
-from crew.models import Chat, ChatMember, Message, Run, ToolCall
+from crew.models import Chat, ChatMember, Message, Run, Skill, ToolCall
 from crew.runs.state import active_run_id
 from crew.runs.tool_calls import tool_calls_for_runs
 from crew.schemas.chat import ChatOut, MessageOut
@@ -137,6 +137,8 @@ async def send_message(
     chat_id: uuid.UUID,
     *,
     content: str,
+    skill_id: uuid.UUID | None = None,
+    card: dict[str, Any] | None = None,
 ) -> tuple[Message, uuid.UUID]:
     """Saves the user's message, creates a queued run and hands it to the worker."""
     chat = await session.scalar(
@@ -152,10 +154,20 @@ async def send_message(
     if bot_id is None:
         raise not_found()
 
-    run = Run(user_id=user_id, bot_id=bot_id, chat_id=chat.id, status="queued")
+    if skill_id is not None:
+        # The skill must be this user's and belong to the Bot that will run it.
+        owned = await session.scalar(
+            select(Skill.id).where(
+                Skill.id == skill_id, Skill.user_id == user_id, Skill.bot_id == bot_id
+            )
+        )
+        if owned is None:
+            raise AppError(404, "skill_not_found", "That skill does not exist.")
+
+    run = Run(user_id=user_id, bot_id=bot_id, chat_id=chat.id, status="queued", skill_id=skill_id)
     session.add(run)
     await session.flush()
-    message = Message(chat_id=chat.id, role="user", content=content, run_id=run.id)
+    message = Message(chat_id=chat.id, role="user", content=content, run_id=run.id, card=card)
     session.add(message)
     chat.last_message_at = datetime.now(UTC)
     await session.commit()

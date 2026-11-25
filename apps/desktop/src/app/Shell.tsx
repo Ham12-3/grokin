@@ -155,6 +155,7 @@ export function Shell() {
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onOpenScreen={openScreen}
             onGiveBack={(runId) => void giveBack(runId)}
+            onOpenBot={select}
           />
         )}
         {!approvalsOpen && selected && detailsOpen && (
@@ -164,6 +165,7 @@ export function Shell() {
             tab={detailsTab}
             onTabChange={setDetailsTab}
             activeRunId={activeRunId}
+            working={isWorking(selected)}
             interactive={interactive}
             onInteractiveChange={setInteractive}
             onDeleted={() => select(null)}

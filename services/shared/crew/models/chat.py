@@ -85,6 +85,8 @@ class Run(Base, IdMixin, TimestampMixin):
     # The messages added during this run (assistant turns and tool results), so a run can
     # be rebuilt exactly when it resumes after an approval.
     transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'"))
+    # The skill the user invoked with "/slug": its steps go into this run's prompt.
+    skill_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("skills.id", ondelete="SET NULL"))
     # Results of the current step's tool calls so far, kept while one of them waits for
     # approval, so a resumed run never repeats a tool that already ran.
     pending_results: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -165,6 +167,32 @@ class ConnectorLog(Base, IdMixin):
     tool: Mapped[str] = mapped_column(Text)
     payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Memory(Base, IdMixin, TimestampMixin):
+    """One short line a Bot remembers about its user. The user can edit or delete it."""
+
+    __tablename__ = "memories"
+    __table_args__ = (Index("ix_memories_bot", "bot_id"),)
+
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    text: Mapped[str] = mapped_column(Text)
+
+
+class Skill(Base, IdMixin, TimestampMixin):
+    """A saved procedure a Bot can run again. `slug` is what follows "/" in the composer."""
+
+    __tablename__ = "skills"
+    __table_args__ = (UniqueConstraint("bot_id", "slug"),)
+
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    slug: Mapped[str] = mapped_column(Text)
+    name: Mapped[str] = mapped_column(Text)
+    description: Mapped[str] = mapped_column(Text)
+    steps: Mapped[str] = mapped_column(Text)  # markdown
+    rules: Mapped[str] = mapped_column(Text, server_default=text("''"))
 
 
 class Computer(Base, IdMixin, TimestampMixin):

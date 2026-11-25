@@ -2,12 +2,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BotSettings } from "@/features/bots/BotSettings";
 import type { Bot } from "@/features/bots/api";
 import { ComputerStatus } from "@/features/computer/ComputerStatus";
+import { useSendMessage } from "@/features/chat/api";
 import { ScreenPanel } from "@/features/computer/ScreenPanel";
+import { MemoryTab } from "@/features/memory/MemoryTab";
+import { SkillsTab } from "@/features/skills/SkillsTab";
 
 // Empty for now; each fills in with its phase.
 const LATER_TABS = [
-  { value: "memory", label: "Memory", text: "What this Bot remembers about you." },
-  { value: "skills", label: "Skills", text: "Saved procedures this Bot can run." },
   { value: "routines", label: "Routines", text: "Skills on a schedule or trigger." },
   { value: "apps", label: "Apps", text: "The apps this Bot may use." },
 ];
@@ -19,6 +20,8 @@ interface DetailsPaneProps {
   tab: DetailsTab;
   onTabChange: (tab: DetailsTab) => void;
   activeRunId: string | undefined;
+  /** True while the Bot is busy: a skill cannot be started then. */
+  working: boolean;
   interactive: boolean;
   onInteractiveChange: (interactive: boolean) => void;
   onDeleted: () => void;
@@ -29,18 +32,22 @@ export function DetailsPane({
   tab,
   onTabChange,
   activeRunId,
+  working,
   interactive,
   onInteractiveChange,
   onDeleted,
 }: DetailsPaneProps) {
+  const sendMessage = useSendMessage(bot.direct_chat_id ?? "");
   return (
     <aside
       aria-label="Details"
       className="border-border flex w-[360px] shrink-0 flex-col overflow-y-auto border-l p-3"
     >
       <Tabs value={tab} onValueChange={(value) => onTabChange(value as DetailsTab)}>
-        <TabsList className="flex h-auto w-full flex-wrap">
+        <TabsList className="grid w-full grid-cols-3 gap-y-0.5 group-data-horizontal/tabs:h-auto">
           <TabsTrigger value="screen">Screen</TabsTrigger>
+          <TabsTrigger value="memory">Memory</TabsTrigger>
+          <TabsTrigger value="skills">Skills</TabsTrigger>
           {LATER_TABS.map((item) => (
             <TabsTrigger key={item.value} value={item.value}>
               {item.label}
@@ -56,6 +63,18 @@ export function DetailsPane({
               activeRunId={activeRunId}
               interactive={interactive}
               onInteractiveChange={onInteractiveChange}
+            />
+          )}
+        </TabsContent>
+        <TabsContent value="memory">{tab === "memory" && <MemoryTab bot={bot} />}</TabsContent>
+        <TabsContent value="skills">
+          {tab === "skills" && (
+            <SkillsTab
+              bot={bot}
+              canRun={!working && !sendMessage.isPending && Boolean(bot.direct_chat_id)}
+              onRun={(skill) =>
+                sendMessage.mutate({ content: `/${skill.slug}`, skillId: skill.id })
+              }
             />
           )}
         </TabsContent>

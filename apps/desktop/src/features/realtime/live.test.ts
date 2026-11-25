@@ -361,3 +361,14 @@ test("a chat that leaves the screen forgets its live text, so it cannot go stale
 
   expect(useLiveStore.getState().streaming).toEqual({});
 });
+
+test("when the Bot changes its memory, the Memory tab is refreshed", () => {
+  const queryClient = seeded([]);
+  queryClient.setQueryData(["memory", BOT], []);
+  const call = { id: "t1", run_id: "run-1", tool: "memory_add", status: "ok" };
+
+  handleEvent(queryClient, { type: "tool.started", chat_id: CHAT, tool_call: call });
+  expect(queryClient.getQueryState(["memory", BOT])?.isInvalidated).toBe(false);
+  handleEvent(queryClient, { type: "tool.finished", chat_id: CHAT, tool_call: call });
+  expect(queryClient.getQueryState(["memory", BOT])?.isInvalidated).toBe(true);
+});

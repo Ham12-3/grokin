@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -72,6 +72,8 @@ class MessageOut(BaseModel):
     role: Literal["user", "bot", "system"]
     bot_id: uuid.UUID | None
     content: str
+    # A skill draft or a handoff: see `crew.skills.service` and `crew.tools.handoff`.
+    card: dict[str, Any] | None = None
     run_id: uuid.UUID | None
     created_at: datetime
 
@@ -88,6 +90,8 @@ class MessagePage(BaseModel):
 
 class SendMessageRequest(BaseModel):
     content: str = Field(min_length=1, max_length=32000)
+    # Set when the user picked a skill with "/": its steps are added to this run's prompt.
+    skill_id: uuid.UUID | None = None
 
     @field_validator("content")
     @classmethod

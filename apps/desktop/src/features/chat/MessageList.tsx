@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef } from "react";
+import { SystemMessage } from "./Cards";
 import { Markdown } from "./Markdown";
 import { RunDetails } from "./RunDetails";
 import { ToolSteps } from "./ToolSteps";
@@ -18,16 +19,39 @@ interface MessageListProps {
   hasOlder: boolean;
   loadingOlder: boolean;
   onLoadOlder: () => void;
+  /** Opens another Bot's chat (from a handoff note). */
+  onOpenBot: (botId: string) => void;
 }
 
-function Bubble({ bot, message, steps }: { bot: Bot; message: Message; steps: ToolCall[] }) {
+interface BubbleProps {
+  bot: Bot;
+  message: Message;
+  steps: ToolCall[];
+  onOpenBot: (botId: string) => void;
+}
+
+function Bubble({ bot, message, steps, onOpenBot }: BubbleProps) {
   const live = useLiveStore((state) => state.streaming[message.id]);
   const streaming = live !== undefined;
   const text = live ?? message.content;
 
+  if (message.role === "system") {
+    return <SystemMessage message={message} onOpenBot={onOpenBot} />;
+  }
   if (message.role === "user") {
+    // A task another Bot passed on, not something the user typed here.
+    const from = message.card?.type === "handoff_from" ? message.card : null;
     return (
-      <div className="flex justify-end">
+      <div className="flex flex-col items-end gap-0.5">
+        {from && (
+          <button
+            type="button"
+            className="text-muted-foreground text-xs underline"
+            onClick={() => onOpenBot(String(from.bot_id))}
+          >
+            Passed on by {String(from.bot_name)}
+          </button>
+        )}
         <div className="bg-primary text-primary-foreground max-w-[75%] rounded-2xl px-3 py-2 text-sm break-words whitespace-pre-wrap">
           {text}
         </div>
@@ -64,6 +88,7 @@ export function MessageList({
   hasOlder,
   loadingOlder,
   onLoadOlder,
+  onOpenBot,
 }: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const topSentinel = useRef<HTMLDivElement>(null);
@@ -150,6 +175,7 @@ export function MessageList({
           bot={bot}
           message={message}
           steps={(message.run_id && toolCalls[message.run_id]) || NO_STEPS}
+          onOpenBot={onOpenBot}
         />
       ))}
     </div>

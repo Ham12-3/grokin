@@ -233,6 +233,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chats/{chat_id}/skill-drafts/{message_id}/save": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Save Skill Draft
+         * @description The user accepts a skill the Bot drafted. Only this creates the skill.
+         */
+        post: operations["save_skill_draft_api_v1_chats__chat_id__skill_drafts__message_id__save_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/chats/{chat_id}/skill-drafts/{message_id}/cancel": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Cancel Skill Draft */
+        post: operations["cancel_skill_draft_api_v1_chats__chat_id__skill_drafts__message_id__cancel_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/runs/{run_id}": {
         parameters: {
             query?: never;
@@ -418,6 +455,78 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bots/{bot_id}/memory": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Memory */
+        get: operations["list_memory_api_v1_bots__bot_id__memory_get"];
+        put?: never;
+        /** Add Memory */
+        post: operations["add_memory_api_v1_bots__bot_id__memory_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/bots/{bot_id}/memory/{line_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Memory */
+        delete: operations["delete_memory_api_v1_bots__bot_id__memory__line_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Memory */
+        patch: operations["update_memory_api_v1_bots__bot_id__memory__line_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/bots/{bot_id}/skills": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Skills */
+        get: operations["list_skills_api_v1_bots__bot_id__skills_get"];
+        put?: never;
+        /** Create Skill */
+        post: operations["create_skill_api_v1_bots__bot_id__skills_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/skills/{skill_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Skill */
+        delete: operations["delete_skill_api_v1_skills__skill_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Skill */
+        patch: operations["update_skill_api_v1_skills__skill_id__patch"];
         trace?: never;
     };
 }
@@ -693,6 +802,31 @@ export interface components {
             /** Output Tokens Today */
             output_tokens_today: number;
         };
+        /** MemoryOut */
+        MemoryOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Bot Id
+             * Format: uuid
+             */
+            bot_id: string;
+            /** Text */
+            text: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** MemoryWrite */
+        MemoryWrite: {
+            /** Text */
+            text: string;
+        };
         /** MessageOut */
         MessageOut: {
             /**
@@ -714,6 +848,10 @@ export interface components {
             bot_id: string | null;
             /** Content */
             content: string;
+            /** Card */
+            card?: {
+                [key: string]: unknown;
+            } | null;
             /** Run Id */
             run_id: string | null;
             /**
@@ -787,6 +925,8 @@ export interface components {
         SendMessageRequest: {
             /** Content */
             content: string;
+            /** Skill Id */
+            skill_id?: string | null;
         };
         /** SendMessageResponse */
         SendMessageResponse: {
@@ -796,6 +936,62 @@ export interface components {
              * Format: uuid
              */
             run_id: string;
+        };
+        /** SkillCreate */
+        SkillCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Description
+             * @default
+             */
+            description: string;
+            /** Steps */
+            steps: string;
+            /**
+             * Rules
+             * @default
+             */
+            rules: string;
+        };
+        /** SkillOut */
+        SkillOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Bot Id
+             * Format: uuid
+             */
+            bot_id: string;
+            /** Slug */
+            slug: string;
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Steps */
+            steps: string;
+            /** Rules */
+            rules: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+        };
+        /** SkillUpdate */
+        SkillUpdate: {
+            /** Name */
+            name?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Steps */
+            steps?: string | null;
+            /** Rules */
+            rules?: string | null;
         };
         /** TokenResponse */
         TokenResponse: {
@@ -1423,6 +1619,70 @@ export interface operations {
             };
         };
     };
+    save_skill_draft_api_v1_chats__chat_id__skill_drafts__message_id__save_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    cancel_skill_draft_api_v1_chats__chat_id__skill_drafts__message_id__cancel_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+                message_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MessageOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_run_api_v1_runs__run_id__get: {
         parameters: {
             query?: never;
@@ -1726,6 +1986,268 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["ApprovalOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_memory_api_v1_bots__bot_id__memory_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    add_memory_api_v1_bots__bot_id__memory_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_memory_api_v1_bots__bot_id__memory__line_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+                line_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_memory_api_v1_bots__bot_id__memory__line_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+                line_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["MemoryWrite"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["MemoryOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_skills_api_v1_bots__bot_id__skills_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_skill_api_v1_bots__bot_id__skills_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_skill_api_v1_skills__skill_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_skill_api_v1_skills__skill_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                skill_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["SkillUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SkillOut"];
                 };
             };
             /** @description Validation Error */

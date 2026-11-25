@@ -61,6 +61,11 @@ class ToolContext:
     takeover: Takeover
     # For the few tools that write to the database themselves (the fake connectors).
     session_factory: async_sessionmaker[AsyncSession] | None = None
+    # Who is running and where: for memory, skills and handoff.
+    bot_id: uuid.UUID | None = None
+    chat_id: uuid.UUID | None = None
+    redis: Any = None
+    queue: Any = None  # anything with `enqueue_job(name, *args)`
 
 
 @dataclass(frozen=True)

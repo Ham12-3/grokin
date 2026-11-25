@@ -142,9 +142,15 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
       break;
     }
     case "tool.started":
-    case "tool.finished":
-      upsertToolCall(queryClient, chatId, event.tool_call as ToolCall);
+    case "tool.finished": {
+      const call = event.tool_call as ToolCall;
+      upsertToolCall(queryClient, chatId, call);
+      // The Bot changed its memory: an open Memory tab shows it straight away.
+      if (event.type === "tool.finished" && call.tool.startsWith("memory_")) {
+        void queryClient.invalidateQueries({ queryKey: ["memory"] });
+      }
       break;
+    }
     case "run.status": {
       const status = str(event.status);
       const botId = str(event.bot_id);

@@ -13,11 +13,19 @@ DEFAULT_REPLY = (
     "- Send a message with a link and it will read the page and save notes\n"
     "- Say `browse` with a link and it opens the page on its computer's screen\n"
     "- Say `sign in` with a link and it opens the page, then asks you to take over\n"
-    "- Say `email` with an address and it drafts an email for you to approve\n\n"
+    "- Say `email` with an address and it drafts an email for you to approve\n"
+    "- Say `remember` or `I prefer` and it saves that to its memory\n"
+    "- Say `save that as a skill` and it drafts a skill; `/` runs a saved one\n"
+    "- Ask the Primary Bot for something that is another Bot's job and it passes it on\n\n"
     "You said: "
 )
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')]+")
 EMAIL_PATTERN = re.compile(r"\bemail\b.*?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.IGNORECASE | re.DOTALL)
+MEMORY_PATTERN = re.compile(r"\b(remember|i prefer|i like|i always|i never)\b", re.IGNORECASE)
+SKILL_PATTERN = re.compile(r"\bsave (that|this|it) as a skill\b", re.IGNORECASE)
+TEAM_PATTERN = re.compile(r"^- \[([0-9a-f]{8})\] ([^:\n]+): (.*)$", re.MULTILINE)
+MEMORY_LINE = re.compile(r"^- \[[0-9a-f]{8}\] (.+)$", re.MULTILINE)
+RUN_SKILL = re.compile(r"^## Skill to run now: (.+)$", re.MULTILINE)
 BROWSE_PATTERN = re.compile(r"\b(browse|sign in)\b", re.IGNORECASE)
 
 
@@ -38,11 +46,67 @@ def _last_text(messages: list[MessageDict]) -> str:
     return ""
 
 
-def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
+def _words(text: str) -> list[str]:
+    return [word + " " for word in text.split(" ")]
+
+
+def _teammate(system: str, request: str) -> tuple[str, str] | None:
+    """The other Bot whose name or job shares a word with the request (Primary Bot only)."""
+    if "## Other Bots" not in system:
+        return None
+    team = system.split("## Other Bots", 1)[1].split("\n## ", 1)[0]
+    asked = {word for word in re.findall(r"[a-z]{4,}", request.lower())}
+    for ref, name, job in TEAM_PATTERN.findall(team):
+        known = set(re.findall(r"[a-z]{4,}", f"{name} {job}".lower())) - {"bots"}
+        if asked & known or any(a[:6] == k[:6] for a in asked for k in known):
+            return ref, name
+    return None
+
+
+def _first_turn(request: str, system: str, tools: list[ToolDefinition], number: int) -> Turn | None:
+    """Dev behaviour for memory, skills and handoff. None means "not one of those"."""
+    names = {tool["name"] for tool in tools}
+    running = RUN_SKILL.search(system)
+    if running is not None:
+        steps = system.split(running.group(0), 1)[1].strip()
+        return Turn(_words(f"Running the skill **{running.group(1)}**.\n\n{steps}"))
+    if SKILL_PATTERN.search(request):
+        draft = {
+            "name": "Saved task",
+            "description": "A task saved from this chat",
+            "steps": "1. Do what the user asked in this chat\n2. Reply with the result",
+        }
+        return Turn(
+            ["Here ", "is ", "a ", "draft."], [ToolUse(f"fake_{number}", "skill_save", draft)]
+        )
+    if MEMORY_PATTERN.search(request):
+        return Turn(
+            ["I ", "will ", "remember ", "that."],
+            [ToolUse(f"fake_{number}", "memory_add", {"text": request[:300]})],
+        )
+    teammate = _teammate(system, request) if "handoff" in names else None
+    if teammate is not None:
+        args = {"bot_id": teammate[0], "task": request}
+        return Turn(
+            _words(f"That is a job for {teammate[1]}."),
+            [ToolUse(f"fake_{number}", "handoff", args)],
+        )
+    return None
+
+
+def _demo_turn(
+    messages: list[MessageDict],
+    call_number: int,
+    system: str = "",
+    tools: list[ToolDefinition] | None = None,
+) -> Turn:
     """Dev behaviour: echo, read a linked page and save notes, or use the browser."""
     last = messages[-1] if messages else {"role": "user", "content": ""}
     request = _last_text(messages)
     if isinstance(last["content"], str):
+        special = _first_turn(request, system, tools or [], call_number)
+        if special is not None:
+            return special
         address = EMAIL_PATTERN.search(request)
         if address is not None:
             draft = {"to": address.group(1), "subject": "A note from Crew", "body": request}
@@ -52,7 +116,17 @@ def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
             )
         url = URL_PATTERN.search(request)
         if url is None:
-            return Turn([word + " " for word in (DEFAULT_REPLY + request).split(" ")])
+            remembered = MEMORY_LINE.findall(
+                system.split("## What you remember", 1)[1].split("\n## ", 1)[0]
+                if "## What you remember" in system
+                else ""
+            )
+            note = ""
+            if remembered:
+                note = "\n\nWhat I remember about you:\n" + "\n".join(
+                    f"- {line}" for line in remembered
+                )
+            return Turn(_words(DEFAULT_REPLY + request + note))
         if BROWSE_PATTERN.search(request):
             return Turn(
                 ["Opening ", "it ", "in ", "my ", "browser."],
@@ -72,6 +146,14 @@ def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
             ["Saving ", "notes."],
             [ToolUse(f"fake_{call_number}", "files_write", {"path": "notes.md", "content": notes})],
         )
+    if previous.get("name") == "memory_add":
+        return Turn(["Noted. ", "You ", "can ", "see ", "it ", "in ", "my ", "Memory ", "tab."])
+    if previous.get("name") == "skill_save":
+        return Turn(_words("I drafted a skill. Click Save on the card to keep it."))
+    if previous.get("name") == "handoff":
+        if last["content"][0].get("is_error"):
+            return Turn(_words("I could not pass it on: " + result[:200]))
+        return Turn(_words("I've passed this on. Open that Bot's chat to follow it."))
     if previous.get("name") == "email_send":
         if last["content"][0].get("is_error"):
             return Turn(["Understood. ", "I ", "did ", "not ", "send ", "it."])
@@ -134,7 +216,7 @@ class FakeLLM:
         call_number = len(self.calls)
         self.calls.append({"system": system, "messages": list(messages), "tools": tools})
         if self.script is None:
-            turn = _demo_turn(messages, call_number)
+            turn = _demo_turn(messages, call_number, system, tools)
         elif call_number < len(self.script):
             turn = self.script[call_number]
         else:

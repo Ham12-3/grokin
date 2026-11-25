@@ -4,8 +4,8 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 5 (approvals + notifications): built and verified on Linux. Waiting for your hands-on
-check in the desktop app on Windows (with phase 4) before phase 6 starts.
+Phase 6 (memory, skills, Primary Bot routing): built and verified on Linux. Waiting for your
+hands-on check in the desktop app on Windows (with phases 4 and 5) before phase 7 starts.
 
 ## Done
 
@@ -232,11 +232,68 @@ Verified on 2026-11-25 (Linux)
   compiles and its logic is unit-tested, but it has only run on Linux without a display),
   and real Claude going through an approval.
 
+### Phase 6: memory, skills, Primary Bot routing
+
+Backend
+
+- Migration `0007`: `memories`, `skills`, `runs.skill_id`.
+- Tools `memory_add` and `memory_remove`. Memory lines are in every system prompt, each
+  with a short id. When a Bot's memory passes about 2k tokens the worker job
+  `compact_memory` asks the LLM to merge similar lines; a result that is empty or not
+  smaller changes nothing.
+- Memory API per Bot: list, add, edit, delete.
+- Skills API: list and create per Bot, edit and delete by id. The slug comes from the name.
+- Tool `skill_save`: posts a draft card in the chat. The skill exists only after
+  `POST /chats/{id}/skill-drafts/{message_id}/save` (the Save button). Cancel discards it.
+- `POST /chats/{id}/messages` takes `skill_id`; that run's prompt gets the skill's steps and
+  rules. Other runs only see the list of skills.
+- Tool `handoff` for the Primary Bot only, with the other Bots' names and jobs in its
+  prompt. It posts the task in the target Bot's chat, starts a run there and leaves a
+  "Passed to ..." note in the Primary Bot's chat. A busy target is refused clearly.
+- `messages.card` is now returned by the API (skill drafts and handoff notes).
+
+Desktop
+
+- Memory tab: list, inline edit, delete, Add line. It refreshes when the Bot remembers
+  something.
+- Skills tab: list, New skill, Edit (markdown steps), Delete, Run now.
+- `/` in the composer opens a searchable skill picker; the pick is sent with the message.
+- Skill draft card (Save skill / Cancel). Handoff note that opens the other Bot's chat, and
+  "Passed on by ..." above the task there.
+- The details tabs sit in two rows instead of overlapping.
+
+Dev mode (`LLM_PROVIDER=fake`): `remember` / `I prefer` saves a memory line, the echo reply
+lists what it remembers, `save that as a skill` drafts one, a picked skill is "run", and the
+Primary Bot passes on a request that shares a word with another Bot's name or job.
+
+Verified on 2026-11-25 (Linux)
+
+- Backend: 229 tests pass (memory in and out of the prompt, merge job, skill steps in the
+  prompt, draft save / cancel, handoff to the right Bot and its refusals, cross-user checks).
+- API + worker + the real frontend in a browser (Rust core stubbed): a stated preference
+  appeared in the Memory tab and in the next reply; "save that as a skill" gave a draft,
+  Save made `/saved-task` appear in the picker and it ran; a research request to the Primary
+  Bot was passed to Research Bot, whose chat showed the task and answered it.
+- Not verified here: real Claude deciding by itself when to remember, draft a skill or hand
+  off (the scripted model does it on trigger words), and the packaged app on Windows.
+
 ## Next
 
-- Phase 6: memory + skills (`prompts/phase-06-memory-skills.md`).
+- Phase 7: routines (`prompts/phase-07-routines.md`).
 
 ## Shortcuts taken (to revisit)
+
+- `memories.embedding` (the optional vector column) is not created; add it when memory
+  search is built.
+- `POST /chats/{id}/skills/from-chat` is not built: asking the Bot to "save that as a skill"
+  does the same through `skill_save`.
+- A memory line can only come from the `memory_add` tool or the user. The prompt tells the
+  Bot to save only what the user said, but a page could still talk it into saving a line.
+  Lines are single-line, capped at 300 characters, visible and deletable; with
+  `always_ask` each one needs approval.
+- A handed-off task appears in the other Bot's chat as a user message written by the
+  Primary Bot. Risky actions there still need approval.
+- The skill editor is a plain text box, not a markdown editor with preview.
 
 - Clicking a notification does not open the approval by itself: Tauri's notification plugin
   has no click event on desktop. Instead, after a notification the Approvals screen opens
@@ -359,3 +416,6 @@ Verified on 2026-11-25 (Linux)
 | 2026-11-25 | An approved row is claimed in one UPDATE and works once | A re-queued or repeated job cannot send the same email twice. |
 | 2026-11-25 | Risky calls in one step are asked one at a time | Each card is answered knowing what already happened. |
 | 2026-11-25 | `approvals` has extra columns: `chat_id`, `tool`, `reason`, `executed_at` | Cards need the chat and tool without joins; `executed_at` is the once-only mark. |
+| 2026-11-25 | A drafted skill is a card in `messages.card`, saved by its own endpoint | The prompt asks for a Save click, not an approval row; the model cannot create a skill alone. |
+| 2026-11-25 | Bots and memory lines are shown to the model with 8-character ids | Short enough to copy reliably; resolved only among that user's own rows. |
+| 2026-11-25 | Only the Primary Bot is offered `handoff`, and the handler checks again | A handed-off task cannot be passed on in a loop. |

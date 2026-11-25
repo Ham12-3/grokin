@@ -15,6 +15,7 @@ from crew.computer.service import stop_idle_computers
 from crew.config import get_settings
 from crew.db import create_engine, create_session_factory
 from crew.llm import LLMError, create_llm
+from crew.memory.service import compact_memory as compact_memory_impl
 from crew.tools import default_registry
 
 log = structlog.get_logger(__name__)
@@ -57,7 +58,13 @@ async def run_agent(ctx: dict[str, Any], run_id: str) -> str:
         http=ctx["http"],
         provider=ctx["provider"],
         llm_error=ctx["llm_error"],
+        queue=ctx["redis"],  # ARQ's own pool: it can enqueue jobs
     )
+
+
+async def compact_memory(ctx: dict[str, Any], bot_id: str) -> str:
+    """Merges similar memory lines once a Bot's memory has grown long."""
+    return await compact_memory_impl(ctx["session_factory"], ctx["llm"], uuid.UUID(bot_id))
 
 
 async def stop_idle(ctx: dict[str, Any]) -> int:
@@ -68,7 +75,7 @@ async def stop_idle(ctx: dict[str, Any]) -> int:
 
 
 class WorkerSettings:
-    functions: ClassVar[list[Any]] = [run_agent]
+    functions: ClassVar[list[Any]] = [run_agent, compact_memory]
     cron_jobs: ClassVar[list[Any]] = [cron(stop_idle, second=0)]
     on_startup = startup
     on_shutdown = shutdown
