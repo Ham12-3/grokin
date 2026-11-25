@@ -1,8 +1,10 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { DetailsPane, type DetailsTab } from "./DetailsPane";
 import { Sidebar } from "./Sidebar";
 import { Button } from "@/components/ui/button";
+import { ApprovalsScreen } from "@/features/approvals/ApprovalsScreen";
+import { useApprovals } from "@/features/approvals/api";
 import { NewBotDialog } from "@/features/bots/NewBotDialog";
 import { useBots, type Bot } from "@/features/bots/api";
 import { ChatView } from "@/features/chat/ChatView";
@@ -10,7 +12,7 @@ import { resumeRun } from "@/features/computer/api";
 import { startRealtime } from "@/features/realtime/connection";
 import { useLiveStore } from "@/features/realtime/live";
 import { apiFetch, type Schemas } from "@/lib/api/client";
-import { authLogout, errorMessage } from "@/lib/tauri";
+import { authLogout, errorMessage, onOpenApprovals, setTrayBadge } from "@/lib/tauri";
 
 /** The signed-in app: sidebar, chat and the details pane. */
 export function Shell() {
@@ -29,8 +31,45 @@ export function Shell() {
   // True while the user is in control of the screen (Take over).
   const [interactive, setInteractive] = useState(false);
   const [newBotOpen, setNewBotOpen] = useState(false);
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
+  const approvals = useApprovals();
+  const pending = approvals.data;
+  const pendingCount = pending?.length ?? 0;
+  const waitingBotIds = useMemo(
+    () => new Set((pending ?? []).map((approval) => approval.bot_id)),
+    [pending],
+  );
 
   useEffect(() => startRealtime(queryClient), [queryClient]);
+
+  // The tray shows how many approvals are waiting.
+  useEffect(() => {
+    void setTrayBadge(pendingCount).catch(() => undefined);
+  }, [pendingCount]);
+
+  // The tray menu, a notification, or Ctrl/Cmd+Shift+A opens the approvals.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    void onOpenApprovals(() => setApprovalsOpen(true))
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => undefined);
+    function onKey(event: KeyboardEvent) {
+      if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "a") {
+        event.preventDefault();
+        setApprovalsOpen(true);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => {
+      cancelled = true;
+      stop?.();
+      window.removeEventListener("keydown", onKey);
+    };
+  }, []);
 
   const list = bots.data ?? [];
   // Fall back to the first Bot (the Primary Bot is listed first).
@@ -39,6 +78,7 @@ export function Shell() {
   const activeRunId = selected?.direct_chat_id ? liveRuns[selected.direct_chat_id] : undefined;
 
   function select(botId: string | null) {
+    setApprovalsOpen(false);
     setSelectedId(botId);
     setInteractive(false); // control never carries over to another Bot's screen
   }
@@ -70,16 +110,21 @@ export function Shell() {
           bots={list}
           selectedId={selected?.id ?? null}
           isWorking={isWorking}
+          waitingBotIds={waitingBotIds}
+          pendingApprovals={pendingCount}
+          approvalsOpen={approvalsOpen}
+          onOpenApprovals={() => setApprovalsOpen(true)}
           userLabel={me.data?.name ?? me.data?.email ?? ""}
           onSelect={select}
           onNewBot={() => setNewBotOpen(true)}
           onSignOut={() => void authLogout()}
         />
 
-        {bots.isPending && (
+        {approvalsOpen && <ApprovalsScreen bots={list} onOpenBot={select} />}
+        {!approvalsOpen && bots.isPending && (
           <p className="text-muted-foreground flex-1 p-8 text-center text-sm">Loading...</p>
         )}
-        {bots.isError && (
+        {!approvalsOpen && bots.isError && (
           <div className="flex-1 space-y-3 p-8 text-center">
             <p role="alert" className="text-destructive text-sm">
               {errorMessage(bots.error, "Could not load your Bots.")}
@@ -89,7 +134,7 @@ export function Shell() {
             </Button>
           </div>
         )}
-        {bots.isSuccess && !selected && (
+        {!approvalsOpen && bots.isSuccess && !selected && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <h2 className="text-lg font-semibold">Create your first Bot</h2>
             <p className="text-muted-foreground max-w-sm text-sm">
@@ -98,18 +143,21 @@ export function Shell() {
             <Button onClick={() => setNewBotOpen(true)}>New Bot</Button>
           </div>
         )}
-        {selected?.direct_chat_id && (
+        {!approvalsOpen && selected?.direct_chat_id && (
           <ChatView
             key={selected.direct_chat_id}
             bot={selected}
             chatId={selected.direct_chat_id}
             working={isWorking(selected)}
+            approvals={(pending ?? []).filter(
+              (approval) => approval.chat_id === selected.direct_chat_id,
+            )}
             onToggleDetails={() => setDetailsOpen((open) => !open)}
             onOpenScreen={openScreen}
             onGiveBack={(runId) => void giveBack(runId)}
           />
         )}
-        {selected && detailsOpen && (
+        {!approvalsOpen && selected && detailsOpen && (
           <DetailsPane
             key={selected.id}
             bot={selected}

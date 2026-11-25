@@ -16,6 +16,7 @@ from crew.computer.provider import ComputerProvider
 from crew.config import Settings
 from crew.errors import unauthorized
 from crew.models import User
+from crew.tools.registry import ToolRegistry
 
 _bearer = HTTPBearer(auto_error=False)
 
@@ -45,6 +46,11 @@ def get_provider(request: Request) -> ComputerProvider:
     return provider
 
 
+def get_registry(request: Request) -> ToolRegistry:
+    registry: ToolRegistry = request.app.state.registry
+    return registry
+
+
 def get_mailer(request: Request) -> Mailer:
     mailer: Mailer = request.app.state.mailer
     return mailer
@@ -61,6 +67,7 @@ RedisDep = Annotated[Redis, Depends(get_redis)]
 HttpDep = Annotated[httpx.AsyncClient, Depends(get_http)]
 MailerDep = Annotated[Mailer, Depends(get_mailer)]
 QueueDep = Annotated[JobQueue, Depends(get_queue)]
+RegistryDep = Annotated[ToolRegistry, Depends(get_registry)]
 ProviderDep = Annotated[ComputerProvider, Depends(get_provider)]
 SessionDep = Annotated[AsyncSession, Depends(get_session)]
 

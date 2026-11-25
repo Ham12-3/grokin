@@ -12,13 +12,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crew.config import Settings
 from crew.models import Run
-from crew.models.chat import ACTIVE_RUN_STATUSES
+from crew.models.chat import ACTIVE_RUN_STATUSES, WAITING_RUN_STATUS
 
 
 def is_active(settings: Settings) -> ColumnElement[bool]:
     cutoff = datetime.now(UTC) - timedelta(seconds=settings.run_timeout_seconds)
     # `updated_at` moves whenever the worker makes progress (or sends a heartbeat).
-    return Run.status.in_(ACTIVE_RUN_STATUSES) & (Run.updated_at > cutoff)
+    alive = Run.status.in_(ACTIVE_RUN_STATUSES) & (Run.updated_at > cutoff)
+    # A run waiting for the user's approval has no worker, and no time limit.
+    return alive | (Run.status == WAITING_RUN_STATUS)
 
 
 async def active_bot_ids(

@@ -362,7 +362,7 @@ async def browser_action(n: int, body: BrowserRequest) -> dict[str, object]:
                 raise HTTPException(status_code=400, detail="Only http and https URLs can be opened.")
             await page.goto(body.url, wait_until="domcontentloaded", timeout=30_000)
             await _settle(page)
-        elif body.action in ("click", "type"):
+        elif body.action in ("click", "type", "submit"):
             if body.element is None:
                 raise HTTPException(status_code=400, detail="An element id is required.")
             target = page.locator(f'[data-crew-id="{int(body.element)}"]').first
@@ -373,6 +373,8 @@ async def browser_action(n: int, body: BrowserRequest) -> dict[str, object]:
                 )
             if body.action == "click":
                 await target.click(timeout=10_000)
+            elif body.action == "submit":
+                await target.press("Enter", timeout=10_000)
             else:
                 await target.fill(body.text or "", timeout=10_000)
                 if body.press_enter:

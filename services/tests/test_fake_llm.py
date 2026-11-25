@@ -49,3 +49,7 @@ async def test_a_plain_link_still_reads_the_page_and_saves_notes() -> None:
 
 async def test_no_link_is_an_echo() -> None:
     assert await _play("browse the shelves") == []
+
+
+async def test_email_drafts_an_email_for_approval() -> None:
+    assert await _play("Email sam@example.com to say the report is ready") == ["email_send"]

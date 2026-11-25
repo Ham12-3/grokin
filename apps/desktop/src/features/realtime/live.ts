@@ -2,19 +2,24 @@
  * Live state from the WebSocket: connection status, text that is still streaming,
  * which Bots are working, and the last error per chat.
  */
-import type { QueryClient } from "@tanstack/react-query";
+import type { InfiniteData, QueryClient } from "@tanstack/react-query";
 import { create } from "zustand";
 import {
   findMessage,
+  flattenMessages,
   messagesKey,
   removeMessage,
   setMessageContent,
   upsertMessage,
   upsertToolCall,
   type Message,
+  type MessagePage,
   type ToolCall,
 } from "@/features/chat/api";
+import { addApproval, approvalsKey, removeApproval, type Approval } from "@/features/approvals/api";
+import type { Bot } from "@/features/bots/api";
 import { computerKey, type Computer, type ComputerStatus } from "@/features/computer/api";
+import { notify } from "@/lib/tauri";
 import type { ServerEvent, WsStatus } from "@/lib/ws";
 
 interface LiveStore {
@@ -74,6 +79,21 @@ function setStreaming(messageId: string, text: string | undefined): void {
   });
 }
 
+/**
+ * Forgets the live text of a chat that is no longer on screen. While it is away its
+ * events are not received, so the text would be stale (or stuck, if the reply finished).
+ * The chat refetches when it is shown again.
+ */
+export function dropChatStreaming(queryClient: QueryClient, chatId: string): void {
+  const data = queryClient.getQueryData<InfiniteData<MessagePage, unknown>>(messagesKey(chatId));
+  const ids = flattenMessages(data).map((message) => message.id);
+  useLiveStore.setState((state) => {
+    const streaming = { ...state.streaming };
+    for (const id of ids) delete streaming[id];
+    return { streaming };
+  });
+}
+
 const RESYNC_MS = 1000;
 const lastResync = new Map<string, number>();
 
@@ -129,8 +149,12 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
       const status = str(event.status);
       const botId = str(event.bot_id);
       const runId = str(event.run_id);
-      // A paused run (Take over) is still in progress.
-      const active = status === "queued" || status === "running" || status === "paused";
+      // A paused run (Take over) or one waiting for approval is still in progress.
+      const active =
+        status === "queued" ||
+        status === "running" ||
+        status === "paused" ||
+        status === "waiting_approval";
       useLiveStore.setState((state) => {
         const runs = { ...state.runs };
         if (active) runs[chatId] = runId;
@@ -159,6 +183,18 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
       }
       break;
     }
+    case "approval.created": {
+      const approval = event.approval as Approval;
+      addApproval(queryClient, approval);
+      const bots = queryClient.getQueryData<Bot[]>(["bots"]);
+      const name = bots?.find((bot) => bot.id === approval.bot_id)?.name ?? "A Bot";
+      // Rust decides whether to show it: only when the window is hidden or not in front.
+      void notify(`${name} needs your approval`, approval.title).catch(() => undefined);
+      break;
+    }
+    case "approval.resolved":
+      removeApproval(queryClient, str(event.approval_id));
+      break;
     case "computer.status": {
       const computerStatus = str(event.status) as ComputerStatus;
       useLiveStore.setState({ computer: computerStatus });
@@ -179,4 +215,5 @@ export function handleReconnected(queryClient: QueryClient): void {
   lastResync.clear();
   void queryClient.invalidateQueries({ queryKey: ["bots"] });
   void queryClient.invalidateQueries({ queryKey: ["messages"] });
+  void queryClient.invalidateQueries({ queryKey: approvalsKey });
 }

@@ -1,6 +1,14 @@
 import { QueryClient, type InfiniteData } from "@tanstack/react-query";
 import { beforeEach, expect, test, vi } from "vitest";
-import { applyDelta, handleEvent, handleReconnected, resetLive, useLiveStore } from "./live";
+import {
+  applyDelta,
+  dropChatStreaming,
+  handleEvent,
+  handleReconnected,
+  resetLive,
+  useLiveStore,
+} from "./live";
+import { approvalsKey, type Approval } from "@/features/approvals/api";
 import {
   flattenMessages,
   messagesKey,
@@ -8,6 +16,12 @@ import {
   type Message,
   type MessagePage,
 } from "@/features/chat/api";
+import * as tauri from "@/lib/tauri";
+
+vi.mock("@/lib/tauri", async (importOriginal) => ({
+  ...(await importOriginal<typeof tauri>()),
+  notify: vi.fn(() => Promise.resolve(true)),
+}));
 
 const CHAT = "chat-1";
 const BOT = "bot-1";
@@ -291,4 +305,59 @@ test("computer status events update the store and the cached computer", () => {
   handleEvent(queryClient, { type: "computer.status", computer_id: "c1", status: "starting" });
   expect(useLiveStore.getState().computer).toBe("starting");
   expect(queryClient.getQueryData<{ status: string }>(["computer"])?.status).toBe("starting");
+});
+
+const APPROVAL = {
+  id: "a1",
+  run_id: "run-1",
+  chat_id: CHAT,
+  bot_id: BOT,
+  tool_call_id: "t1",
+  tool: "email_send",
+  title: "Send email to sam@example.com",
+  preview: { kind: "email", fields: { to: "sam@example.com" }, context: {} },
+  status: "pending",
+  created_at: "2026-01-01T00:00:00Z",
+  resolved_at: null,
+} as Approval;
+
+test("a new approval joins the list and asks for a notification; an answer removes it", () => {
+  const queryClient = seeded([]);
+  queryClient.setQueryData<Approval[]>(approvalsKey, []);
+  queryClient.setQueryData(["bots"], [{ id: BOT, name: "Inbox Bot" }]);
+
+  handleEvent(queryClient, { type: "approval.created", approval: APPROVAL });
+  handleEvent(queryClient, { type: "approval.created", approval: APPROVAL }); // a repeat
+
+  expect(queryClient.getQueryData<Approval[]>(approvalsKey)).toEqual([APPROVAL]);
+  expect(vi.mocked(tauri.notify)).toHaveBeenCalledWith(
+    "Inbox Bot needs your approval",
+    "Send email to sam@example.com",
+  );
+
+  handleEvent(queryClient, { type: "approval.resolved", approval_id: "a1", status: "approved" });
+  expect(queryClient.getQueryData<Approval[]>(approvalsKey)).toEqual([]);
+});
+
+test("a run waiting for approval is still in progress, so it can be stopped", () => {
+  const queryClient = seeded([]);
+  handleEvent(queryClient, {
+    type: "run.status",
+    chat_id: CHAT,
+    bot_id: BOT,
+    run_id: "run-1",
+    status: "waiting_approval",
+  });
+  expect(useLiveStore.getState().runs[CHAT]).toBe("run-1");
+  expect(useLiveStore.getState().working[BOT]).toBe(true);
+});
+
+test("a chat that leaves the screen forgets its live text, so it cannot go stale", () => {
+  const queryClient = seeded([message("m1", "user", "hi"), message("m2", "bot", "")]);
+  handleEvent(queryClient, delta(0, "Drafting"));
+  expect(useLiveStore.getState().streaming.m2).toBe("Drafting");
+
+  dropChatStreaming(queryClient, CHAT);
+
+  expect(useLiveStore.getState().streaming).toEqual({});
 });

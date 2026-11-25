@@ -5,8 +5,8 @@ Modes (docs/06-agent-loop.md):
   ask_risky   only risky calls need approval (default)
   never_ask   same as ask_risky: risky calls ALWAYS ask, whatever the mode
 
-Phase 3 has no approval cards yet, so a call that needs approval is refused and the model
-is told why. Phase 5 turns that refusal into an `approvals` row and a paused run.
+A call that needs approval becomes an `approvals` row and the run stops until the user
+answers (see `crew.agent.loop` and `crew.approvals.service`).
 """
 
 from dataclasses import dataclass

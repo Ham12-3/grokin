@@ -12,10 +12,12 @@ DEFAULT_REPLY = (
     "- It streams word by word\n- It supports `markdown`\n"
     "- Send a message with a link and it will read the page and save notes\n"
     "- Say `browse` with a link and it opens the page on its computer's screen\n"
-    "- Say `sign in` with a link and it opens the page, then asks you to take over\n\n"
+    "- Say `sign in` with a link and it opens the page, then asks you to take over\n"
+    "- Say `email` with an address and it drafts an email for you to approve\n\n"
     "You said: "
 )
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')]+")
+EMAIL_PATTERN = re.compile(r"\bemail\b.*?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.IGNORECASE | re.DOTALL)
 BROWSE_PATTERN = re.compile(r"\b(browse|sign in)\b", re.IGNORECASE)
 
 
@@ -41,6 +43,13 @@ def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
     last = messages[-1] if messages else {"role": "user", "content": ""}
     request = _last_text(messages)
     if isinstance(last["content"], str):
+        address = EMAIL_PATTERN.search(request)
+        if address is not None:
+            draft = {"to": address.group(1), "subject": "A note from Crew", "body": request}
+            return Turn(
+                ["Here ", "is ", "the ", "email. ", "It ", "needs ", "your ", "approval."],
+                [ToolUse(f"fake_{call_number}", "email_send", draft)],
+            )
         url = URL_PATTERN.search(request)
         if url is None:
             return Turn([word + " " for word in (DEFAULT_REPLY + request).split(" ")])
@@ -63,6 +72,10 @@ def _demo_turn(messages: list[MessageDict], call_number: int) -> Turn:
             ["Saving ", "notes."],
             [ToolUse(f"fake_{call_number}", "files_write", {"path": "notes.md", "content": notes})],
         )
+    if previous.get("name") == "email_send":
+        if last["content"][0].get("is_error"):
+            return Turn(["Understood. ", "I ", "did ", "not ", "send ", "it."])
+        return Turn(["Done. ", "The ", "email ", "was ", "sent."])
     if previous.get("name") == "browser_open":
         if "sign in" in request.lower():
             reason = "Please sign in on this page, then give control back."

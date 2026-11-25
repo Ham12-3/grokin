@@ -23,6 +23,7 @@ from crew.computer.service import (
 from crew.llm.base import ToolUse
 from crew.llm.fake import FakeLLM, Turn
 from crew.tools import default_registry
+from crew.tools.browser import submit_risk
 from crew.tools.terminal import terminal_risk
 from tests.conftest import Ctx
 from tests.helpers import (
@@ -159,7 +160,7 @@ async def test_browser_open_read_click_and_type(ctx: Ctx) -> None:
     assert await display_for_bot(ctx.redis, uuid.UUID(user_id), uuid.UUID(bot["id"])) == 1
 
 
-async def test_clicking_a_send_button_is_refused(ctx: Ctx) -> None:
+async def test_clicking_a_send_button_waits_for_approval(ctx: Ctx) -> None:
     provider = _fake(ctx)
     me, bot, _ = await _setup(ctx)
     sent = await send(ctx, me, bot["direct_chat_id"], "send it")
@@ -167,17 +168,48 @@ async def test_clicking_a_send_button_is_refused(ctx: Ctx) -> None:
         [
             Turn([], [_use("browser_open", url="https://example.com/")]),
             Turn([], [_use("browser_click", element=3)]),
-            Turn(["I need your approval."]),
+            Turn(["Sent."]),
         ]
     )
-    await run_worker(ctx, sent["run_id"], llm)
+    assert await run_worker(ctx, sent["run_id"], llm) == "waiting_approval"
 
     assert [action for _, action, _ in provider.browser_calls] == ["open"]  # no click happened
     calls = await _tool_calls(ctx, me, sent["run_id"])
     assert [(c["tool"], c["risk"], c["status"]) for c in calls] == [
         ("browser_open", "safe", "ok"),
-        ("browser_click", "risky", "rejected"),
+        ("browser_click", "risky", "waiting_approval"),
     ]
+    pending = (await ctx.client.get(f"{API}/approvals?status=pending", headers=me)).json()
+    assert pending[0]["title"] == "Click “Send message” on example.com"
+    assert pending[0]["preview"]["context"]["page"] == "https://example.com/"
+
+    # Approved: the click happens, once.
+    resp = await ctx.client.post(f"{API}/approvals/{pending[0]['id']}/approve", headers=me)
+    assert resp.status_code == 200, resp.text
+    assert await run_worker(ctx, sent["run_id"], llm) == "completed"
+    assert [action for _, action, _ in provider.browser_calls] == ["open", "click"]
+
+
+@pytest.mark.parametrize(
+    ("url", "text", "labels", "risk"),
+    [
+        ("https://shop.example/cart", "Your basket", {1: "Search"}, "safe"),
+        ("https://shop.example/checkout", "Review", {1: "Email"}, "risky"),
+        ("https://shop.example/x", "Enter your card number", {1: "Name"}, "risky"),
+        ("https://mail.example/compose", "New message", {1: "To", 2: "Send"}, "risky"),
+        ("https://app.example/settings", "Danger zone", {1: "Name", 2: "Delete account"}, "risky"),
+        ("https://example.com/search", "Find things", {1: "Search", 2: "Go"}, "safe"),
+    ],
+)
+async def test_browser_submit_risk(
+    tmp_path: Any, url: str, text: str, labels: dict[int, str], risk: str
+) -> None:
+    async with httpx.AsyncClient() as http:
+        tool_ctx = tool_context(http, tmp_path)
+        tool_ctx.computer.page_url = url
+        tool_ctx.computer.page_text = text
+        tool_ctx.computer.element_labels.update(labels)
+        assert submit_risk({"element": 1}, tool_ctx) == risk
 
 
 async def test_browser_open_refuses_internal_addresses(ctx: Ctx) -> None:
@@ -244,18 +276,34 @@ async def test_terminal_runs_safe_commands_and_refuses_risky_ones(ctx: Ctx) -> N
             Turn(["done"]),
         ]
     )
-    await run_worker(ctx, sent["run_id"], llm)
+    assert await run_worker(ctx, sent["run_id"], llm) == "waiting_approval"
 
+    # The safe one ran; the first risky one waits; the next has not been looked at yet.
     assert provider.commands == ["echo hello"]
+    calls = await _tool_calls(ctx, me, sent["run_id"])
+    assert [(c["risk"], c["status"]) for c in calls] == [
+        ("safe", "ok"),
+        ("risky", "waiting_approval"),
+    ]
+
+    # Rejecting each in turn lets the run finish without running either.
+    for _ in range(2):
+        pending = (await ctx.client.get(f"{API}/approvals?status=pending", headers=me)).json()
+        assert len(pending) == 1
+        await ctx.client.post(f"{API}/approvals/{pending[0]['id']}/reject", headers=me)
+        status = await run_worker(ctx, sent["run_id"], llm)
+    assert status == "completed"
+    assert provider.commands == ["echo hello"]  # the safe command did not run a second time
     calls = await _tool_calls(ctx, me, sent["run_id"])
     assert [(c["risk"], c["status"]) for c in calls] == [
         ("safe", "ok"),
         ("risky", "rejected"),
         ("risky", "rejected"),
     ]
-    output = llm.calls[1]["messages"][-1]["content"][0]["content"]
-    assert output.startswith('<untrusted source="terminal">')
-    assert "exit code: 0" in output and "hello" in output
+    results = llm.calls[1]["messages"][-1]["content"]
+    assert results[0]["content"].startswith('<untrusted source="terminal">')
+    assert "exit code: 0" in results[0]["content"] and "hello" in results[0]["content"]
+    assert "rejected" in results[1]["content"] and results[1]["is_error"] is True
 
 
 @pytest.mark.parametrize(

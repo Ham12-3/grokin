@@ -3,7 +3,9 @@
 Runs inside the worker, never inside an API request. See docs/06-agent-loop.md.
 
 - Every tool call is written to `tool_calls` before it runs and updated after.
-- A call that needs approval never runs (see `crew.approvals.policy`).
+- A call that needs approval becomes an `approvals` row and the run stops as
+  `waiting_approval`. The approve / reject endpoint queues it again and the loop picks up
+  where it stopped, from the database. Execution always goes through `crew.approvals.gate`.
 - Tool output from outside is wrapped in <untrusted> tags by the registry.
 - The loop stops at the step limit, the token budgets, on cancel, or when the LLM is done.
 - Each text delta carries its character `offset`, so a reconnecting client can tell whether
@@ -26,16 +28,24 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from crew import events, usage
 from crew.agent.prompts import build_system_prompt
-from crew.approvals import policy
+from crew.approvals import gate, policy
+from crew.approvals.service import approval_out
 from crew.budget import BudgetStop, check_budget, step_limit_stop
 from crew.computer.provider import ComputerProvider
 from crew.computer.service import RunComputer
 from crew.config import Settings
 from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
-from crew.models import Bot, Chat, Message, Run, ToolCall
+from crew.models import Approval, Bot, Chat, Message, Run, ToolCall
 from crew.schemas.chat import MessageOut
 from crew.schemas.run import ToolCallOut
-from crew.tools.registry import ToolContext, ToolRegistry, ToolResult, validation_message
+from crew.tools.registry import (
+    Tool,
+    ToolContext,
+    ToolRegistry,
+    ToolResult,
+    preview_for,
+    validation_message,
+)
 
 log = structlog.get_logger(__name__)
 
@@ -43,10 +53,12 @@ GENERIC_ERROR = "Something went wrong while replying. Try again."
 OUTPUT_LIMIT = BudgetStop(
     "output_limit", "My reply was cut off because it reached the length limit."
 )
-APPROVALS_NOT_READY = (
-    " Approvals are not available yet, so this action was not run. "
-    "Tell the user you could not do it."
+REJECTED = (
+    "The user rejected this action, so it was not done. Do not try it again or find another "
+    "way to do it unless they ask. Tell them it was not done."
 )
+NOT_APPROVED = "This action needs the user's approval and does not have it. It was not done."
+INTERRUPTED = "This step was interrupted before it finished. It may not have happened."
 
 
 def cancel_key(run_id: uuid.UUID | str) -> str:
@@ -73,7 +85,7 @@ async def request_resume(redis: Redis, run_id: uuid.UUID) -> None:
 
 @dataclass
 class Outcome:
-    status: str  # completed | failed | cancelled
+    status: str  # completed | failed | cancelled | waiting_approval
     stop: BudgetStop | None = None
     error: LLMError | None = None
 
@@ -219,6 +231,45 @@ async def _wait_while_paused(state: _State, session: AsyncSession, run: Run) -> 
     await state.publish_status("running")
 
 
+async def _ask_for_approval(
+    state: _State, session: AsyncSession, run: Run, row: ToolCall, tool: Tool, ctx: ToolContext
+) -> None:
+    """Creates the approval, parks the run and tells the user. Nothing has run."""
+    preview = preview_for(tool, dict(row.args), ctx)
+    approval = Approval(
+        user_id=state.user_id,
+        run_id=state.run_id,
+        tool_call_id=row.id,
+        bot_id=state.bot_id,
+        chat_id=state.chat_id,
+        tool=row.tool,
+        title=preview.title[:300],
+        preview={"kind": preview.kind, "fields": preview.fields, "context": preview.context},
+    )
+    session.add(approval)
+    row.status = "waiting_approval"
+    # In the same commit, so the approve endpoint never sees a half-parked run.
+    run.status = "waiting_approval"
+    await session.execute(
+        update(Message).where(Message.id == state.message_id).values(content=state.text)
+    )
+    await session.commit()
+    await session.refresh(row)
+    await session.refresh(approval)
+    await state.publish_chat(
+        "tool.started",
+        run_id=str(state.run_id),
+        tool_call=ToolCallOut.model_validate(row).model_dump(mode="json"),
+    )
+    await state.publish_status("waiting_approval", message_id=str(state.message_id))
+    await events.publish(
+        state.redis,
+        events.user_channel(state.user_id),
+        "approval.created",
+        {"approval": approval_out(approval).model_dump(mode="json")},
+    )
+
+
 async def _run_tool(
     state: _State,
     session: AsyncSession,
@@ -227,30 +278,39 @@ async def _run_tool(
     ctx: ToolContext,
     step: int,
     use: ToolUse,
-) -> dict[str, Any]:
-    """Records, checks and runs one tool call. Returns the tool_result block for the LLM."""
+) -> dict[str, Any] | None:
+    """Records, checks and runs one tool call. Returns the tool_result block for the LLM,
+    or None when the call now waits for the user's approval."""
     await _wait_while_paused(state, session, run)
     tool = registry.get(use.name)
-    args: dict[str, Any] = use.input if isinstance(use.input, dict) else {}
-    invalid = None if tool is None else validation_message(tool, use.input)
-    risk = tool.risk(args, ctx) if tool is not None and invalid is None else "safe"
-    summary = tool.summary(args) if tool is not None else f"Tried an unknown tool: {use.name[:40]}"
-
-    # Written BEFORE anything runs.
-    row = ToolCall(
-        run_id=state.run_id,
-        user_id=state.user_id,
-        step=step,
-        llm_tool_use_id=use.id,
-        tool=use.name[:80],
-        args=args,
-        risk=risk,
-        status="pending",
-        summary=summary[:300],
+    row = await session.scalar(
+        select(ToolCall).where(ToolCall.run_id == state.run_id, ToolCall.llm_tool_use_id == use.id)
     )
-    session.add(row)
-    await session.commit()
-    await session.refresh(row)
+    resumed = row is not None
+    if row is None:
+        args: dict[str, Any] = use.input if isinstance(use.input, dict) else {}
+        invalid = None if tool is None else validation_message(tool, use.input)
+        risk = tool.risk(args, ctx) if tool is not None and invalid is None else "safe"
+        summary = (
+            tool.summary(args) if tool is not None else f"Tried an unknown tool: {use.name[:40]}"
+        )
+        # Written BEFORE anything runs.
+        row = ToolCall(
+            run_id=state.run_id,
+            user_id=state.user_id,
+            step=step,
+            llm_tool_use_id=use.id,
+            tool=use.name[:80],
+            args=args,
+            risk=risk,
+            status="pending",
+            summary=summary[:300],
+        )
+        session.add(row)
+        await session.commit()
+        await session.refresh(row)
+    else:
+        invalid = None
 
     async def announce(event_type: str) -> None:
         await state.publish_chat(
@@ -259,30 +319,54 @@ async def _run_tool(
             tool_call=ToolCallOut.model_validate(row).model_dump(mode="json"),
         )
 
-    await announce("tool.started")
+    if not resumed:
+        await announce("tool.started")
 
     final_status = "error"
     if tool is None:
         result = ToolResult(False, f"There is no tool named {use.name[:40]}.", "Unknown tool")
     elif invalid is not None:
         result = ToolResult(False, invalid, "Invalid arguments")
+    elif resumed and row.status != "waiting_approval":
+        # Caught mid-flight by a crash: never run a tool twice on a guess.
+        result = ToolResult(False, INTERRUPTED, row.result_summary or "Interrupted")
     else:
-        decision = policy.check(state.approval_mode, tool, risk)
-        if decision.needs_approval:
-            # The gate: this call does not run. Phase 5 turns this into an approval card.
-            final_status = "rejected"
-            result = ToolResult(
-                False,
-                f"{decision.reason}{APPROVALS_NOT_READY}",
-                "Needs your approval (not available yet)",
+        if resumed:
+            answer = await session.scalar(
+                select(Approval.status).where(Approval.tool_call_id == row.id)
             )
+        else:
+            needs = policy.check(state.approval_mode, tool, row.risk).needs_approval  # type: ignore[arg-type]
+            if needs:
+                await _ask_for_approval(state, session, run, row, tool, ctx)
+                return None
+            answer = None
+        if answer == "pending":
+            return None  # still waiting
+        if answer in ("rejected", "expired"):
+            final_status = "rejected"
+            result = ToolResult(False, REJECTED, "You rejected this")
         else:
             row.status = "running"
             row.started_at = datetime.now(UTC)
             await session.commit()
-            result = await registry.execute(tool, args, ctx)
-            if result.ok:
-                final_status = "ok"
+            if resumed:
+                await announce("tool.started")  # the card's step moves from waiting to running
+            try:
+                # The gate checks the approval row itself, whatever this loop decided.
+                result, used = await gate.execute(
+                    session, registry, row, tool, state.approval_mode, ctx
+                )
+            except gate.NotApproved:
+                final_status = "rejected"
+                result = ToolResult(False, NOT_APPROVED, "Not approved")
+            else:
+                if used != row.args:
+                    # The user edited it: record what actually ran.
+                    row.args = used
+                    row.summary = tool.summary(used)[:300]
+                if result.ok:
+                    final_status = "ok"
 
     # Updated AFTER it ran (or was refused).
     row.status = final_status
@@ -300,6 +384,48 @@ async def _run_tool(
     if not result.ok:
         block["is_error"] = True
     return block
+
+
+async def _run_tools(
+    state: _State,
+    session: AsyncSession,
+    run: Run,
+    registry: ToolRegistry,
+    ctx: ToolContext,
+    step: int,
+    uses: list[ToolUse],
+) -> list[dict[str, Any]] | None:
+    """Runs one step's tool calls in order. Returns None if the run now waits for approval.
+
+    Each result is saved as soon as it exists, so a resumed run skips what already ran.
+    """
+    results: list[dict[str, Any]] = list(run.pending_results)
+    have = {block.get("tool_use_id") for block in results}
+    for use in uses:
+        if use.id in have:
+            continue
+        block = await _run_tool(state, session, run, registry, ctx, step, use)
+        if block is None:
+            return None
+        results.append(block)
+        run.pending_results = list(results)
+        await session.commit()
+    run.pending_results = []
+    return results
+
+
+def _unfinished_tool_uses(transcript: list[MessageDict]) -> list[ToolUse]:
+    """Tool calls of the last assistant turn, if their results are not in the transcript."""
+    if not transcript or transcript[-1]["role"] != "assistant":
+        return []
+    content = transcript[-1]["content"]
+    if not isinstance(content, list):
+        return []
+    return [
+        ToolUse(str(block["id"]), str(block["name"]), block.get("input", {}))
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "tool_use"
+    ]
 
 
 async def _loop(
@@ -334,7 +460,23 @@ async def _loop(
             await session.commit()
             state.last_saved = time.monotonic()
 
-    for step in range(settings.crew_max_steps):
+    async def finish_step(step: int, uses: list[ToolUse]) -> bool:
+        results = await _run_tools(state, session, run, registry, ctx, step, uses)
+        if results is None:
+            return False
+        tool_message: MessageDict = {"role": "user", "content": results}
+        messages.append(tool_message)
+        transcript.append(tool_message)
+        run.transcript = list(transcript)
+        await session.commit()
+        return True
+
+    # A run that was waiting for approval continues with the step it stopped in.
+    unfinished = _unfinished_tool_uses(transcript)
+    if unfinished and not await finish_step(max(run.steps - 1, 0), unfinished):
+        return Outcome("waiting_approval")
+
+    for step in range(run.steps, settings.crew_max_steps):
         await _wait_while_paused(state, session, run)
         stop = await check_budget(session, settings, run, state.user_id)
         if stop is not None:
@@ -365,15 +507,8 @@ async def _loop(
                 return Outcome("completed", stop=OUTPUT_LIMIT)
             return Outcome("completed")
 
-        results = [
-            await _run_tool(state, session, run, registry, ctx, step, use)
-            for use in result.tool_uses
-        ]
-        tool_message: MessageDict = {"role": "user", "content": results}
-        messages.append(tool_message)
-        transcript.append(tool_message)
-        run.transcript = list(transcript)
-        await session.commit()
+        if not await finish_step(step, result.tool_uses):
+            return Outcome("waiting_approval")
 
     return Outcome("completed", stop=step_limit_stop(settings))
 
@@ -382,6 +517,10 @@ async def _finish(
     state: _State, session_factory: async_sessionmaker[AsyncSession], outcome: Outcome
 ) -> None:
     """Writes the final state with a fresh session, whatever happened to the loop's one."""
+    if outcome.status == "waiting_approval":
+        # Already parked and announced in one commit by `_ask_for_approval`. The approve
+        # endpoint may have queued the run again by now, so nothing is written here.
+        return
     if outcome.stop is not None:
         if state.length:
             await state.emit("\n\n")
@@ -470,7 +609,7 @@ async def run_agent(
         claimed = await session.execute(
             update(Run)
             .where(Run.id == run_id, Run.status == "queued")
-            .values(status="running", started_at=datetime.now(UTC))
+            .values(status="running", started_at=func.coalesce(Run.started_at, datetime.now(UTC)))
             .returning(Run.id)
         )
         run = await session.get(Run, run_id, populate_existing=True) if claimed.first() else None
@@ -481,8 +620,16 @@ async def run_agent(
             log.warning("run.skipped", run_id=str(run_id))
             return "skipped"
 
-        message = Message(chat_id=run.chat_id, role="bot", bot_id=bot.id, content="", run_id=run.id)
-        session.add(message)
+        # A run resumed after an approval continues its existing reply.
+        message = await session.scalar(
+            select(Message).where(Message.run_id == run.id, Message.role == "bot").limit(1)
+        )
+        resumed = message is not None
+        if message is None:
+            message = Message(
+                chat_id=run.chat_id, role="bot", bot_id=bot.id, content="", run_id=run.id
+            )
+            session.add(message)
         await session.commit()
         await session.refresh(message)
     except BaseException:
@@ -499,10 +646,15 @@ async def run_agent(
         redis=redis,
         settings=settings,
     )
+    if resumed and message.content:
+        state.parts.append(message.content)
+        state.length = len(message.content)
+        state.need_separator = True
     await state.publish_status("running")
-    await state.publish_chat(
-        "message.created", message=MessageOut.model_validate(message).model_dump(mode="json")
-    )
+    if not resumed:
+        await state.publish_chat(
+            "message.created", message=MessageOut.model_validate(message).model_dump(mode="json")
+        )
 
     task = asyncio.current_task()
     assert task is not None
@@ -522,6 +674,7 @@ async def run_agent(
         http=http,
         computer=computer,
         takeover=takeover,
+        session_factory=session_factory,
     )
     try:
         if llm_error is not None or llm is None:

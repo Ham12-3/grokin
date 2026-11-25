@@ -17,6 +17,8 @@
     "allow-auth-get-access-token",
     "allow-auth-logout",
     "allow-api-base-url",
-    "allow-app-version"
+    "allow-app-version",
+    "allow-notify",
+    "allow-set-tray-badge"
   ]
 }

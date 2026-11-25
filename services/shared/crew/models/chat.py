@@ -13,6 +13,8 @@ from sqlalchemy import (
     Index,
     Integer,
     Text,
+    UniqueConstraint,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
@@ -23,6 +25,8 @@ from crew.models.base import IdMixin, TimestampMixin
 
 APPROVAL_MODES = ("always_ask", "ask_risky", "never_ask")
 ACTIVE_RUN_STATUSES = ("queued", "running", "paused")
+# Waiting for the user: alive however long it takes (no worker holds it).
+WAITING_RUN_STATUS = "waiting_approval"
 
 
 class Bot(Base, IdMixin, TimestampMixin):
@@ -81,6 +85,11 @@ class Run(Base, IdMixin, TimestampMixin):
     # The messages added during this run (assistant turns and tool results), so a run can
     # be rebuilt exactly when it resumes after an approval.
     transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'"))
+    # Results of the current step's tool calls so far, kept while one of them waits for
+    # approval, so a resumed run never repeats a tool that already ran.
+    pending_results: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, server_default=text("'[]'")
+    )
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -118,6 +127,44 @@ class Message(Base, IdMixin, TimestampMixin):
     content: Mapped[str] = mapped_column(Text)
     card: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+
+
+class Approval(Base, IdMixin, TimestampMixin):
+    """A risky tool call waiting for the user. Only the approve endpoint sets `approved`."""
+
+    __tablename__ = "approvals"
+    __table_args__ = (
+        UniqueConstraint("tool_call_id"),
+        Index("ix_approvals_user_status", "user_id", "status"),
+    )
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    run_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("runs.id", ondelete="CASCADE"))
+    tool_call_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("tool_calls.id", ondelete="CASCADE"))
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    chat_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"))
+    tool: Mapped[str] = mapped_column(Text)
+    title: Mapped[str] = mapped_column(Text)  # "Send email to sam@acme.com"
+    preview: Mapped[dict[str, Any]] = mapped_column(JSONB)  # what the user sees and can edit
+    # pending | approved | rejected | expired
+    status: Mapped[str] = mapped_column(Text, server_default=text("'pending'"))
+    edited_args: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    reason: Mapped[str | None] = mapped_column(Text)  # why the user rejected it
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Set when the worker runs the approved call: an approval is good for one execution.
+    executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ConnectorLog(Base, IdMixin):
+    """What the fake connector tools "sent" (email_send, social_post). Dev and tests only."""
+
+    __tablename__ = "connector_log"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+    tool: Mapped[str] = mapped_column(Text)
+    payload: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Computer(Base, IdMixin, TimestampMixin):

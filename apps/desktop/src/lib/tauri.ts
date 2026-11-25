@@ -73,3 +73,18 @@ export function onAuthChanged(callback: (signedIn: boolean) => void): Promise<Un
 export function onAuthError(callback: (error: TauriError) => void): Promise<UnlistenFn> {
   return listen<TauriError>("auth:error", (event) => callback(event.payload));
 }
+
+/** Shows a desktop notification, but only when the window is hidden or not in front. */
+export function notify(title: string, body: string): Promise<boolean> {
+  return invoke("notify", { title, body });
+}
+
+/** Pending approvals count for the tray tooltip and menu. */
+export function setTrayBadge(count: number): Promise<void> {
+  return invoke("set_tray_badge", { count });
+}
+
+/** The tray menu or a notification asked to see the approvals. */
+export function onOpenApprovals(callback: () => void): Promise<UnlistenFn> {
+  return listen("open:approvals", () => callback());
+}

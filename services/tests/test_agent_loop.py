@@ -1,4 +1,7 @@
-"""The agent loop with a scripted LLM: tools, the approval gate, limits and cancel."""
+"""The agent loop with a scripted LLM: tools, limits and cancel.
+
+Approvals are in `test_approvals.py`.
+"""
 
 import asyncio
 import time
@@ -181,66 +184,6 @@ async def test_tool_call_is_written_before_it_runs_and_updated_after(ctx: Ctx) -
     assert row.args == {"x": 1}
     assert [m["role"] for m in row.transcript] == ["assistant", "user", "assistant"]
     assert row.transcript[1]["content"][0]["tool_use_id"] == row.llm_tool_use_id
-
-
-# --- The approval gate ------------------------------------------------------------------
-
-
-async def test_a_risky_call_never_runs(ctx: Ctx) -> None:
-    me, bot, _ = await _setup(ctx)
-    sent = await send(ctx, me, bot["direct_chat_id"], "email the team")
-    executed: list[Args] = []
-
-    async def email_send(args: Args, tool_ctx: ToolContext) -> ToolOutput:
-        executed.append(args)
-        return ToolOutput("sent", "Sent")
-
-    risky = _tool("email_send", email_send, read_only=False, risk=lambda args, ctx: "risky")
-    llm = FakeLLM([Turn([], [_use("email_send", to="sam@example.com")]), Turn(["I could not."])])
-    assert await run_worker(ctx, sent["run_id"], llm, registry=_registry(risky)) == "completed"
-
-    assert executed == []
-    calls = await _tool_calls(ctx, me, sent["run_id"])
-    assert [(c["tool"], c["risk"], c["status"]) for c in calls] == [
-        ("email_send", "risky", "rejected")
-    ]
-    assert calls[0]["started_at"] is None
-    result = llm.calls[1]["messages"][-1]["content"][0]
-    assert result["is_error"] is True
-    assert "needs the user's approval" in result["content"]
-
-
-async def test_never_ask_mode_still_blocks_risky_calls(ctx: Ctx) -> None:
-    me, bot, _ = await _setup(ctx, approval_mode="never_ask")
-    sent = await send(ctx, me, bot["direct_chat_id"], "pay it")
-    executed: list[Args] = []
-
-    async def pay(args: Args, tool_ctx: ToolContext) -> ToolOutput:
-        executed.append(args)
-        return ToolOutput("paid", "Paid")
-
-    risky = _tool("pay", pay, read_only=False, risk=lambda args, ctx: "risky")
-    llm = FakeLLM([Turn([], [_use("pay")]), Turn(["no"])])
-    await run_worker(ctx, sent["run_id"], llm, registry=_registry(risky))
-    assert executed == []
-
-
-async def test_always_ask_mode_blocks_writes_but_allows_reads(ctx: Ctx) -> None:
-    me, bot, user_id = await _setup(ctx, approval_mode="always_ask")
-    sent = await send(ctx, me, bot["direct_chat_id"], "write then list")
-    llm = FakeLLM(
-        [
-            Turn([], [_use("files_write", path="a.md", content="x"), _use("files_list")]),
-            Turn(["done"]),
-        ]
-    )
-    await run_worker(ctx, sent["run_id"], llm)
-    calls = await _tool_calls(ctx, me, sent["run_id"])
-    assert [(c["tool"], c["status"]) for c in calls] == [
-        ("files_write", "rejected"),
-        ("files_list", "ok"),
-    ]
-    assert not (Path(ctx.settings.workspaces_dir) / user_id / "a.md").exists()
 
 
 # --- Bad tool calls do not break the run ------------------------------------------------

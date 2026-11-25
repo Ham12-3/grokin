@@ -8,7 +8,7 @@ machine itself (no root, blocked private networks, CPU and memory caps).
 import re
 
 from crew.computer.provider import ComputerError
-from crew.tools.registry import Args, Risk, Tool, ToolContext, ToolError, ToolOutput
+from crew.tools.registry import Args, Preview, Risk, Tool, ToolContext, ToolError, ToolOutput
 
 RISKY_PATTERNS = [
     re.compile(r"\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rRf]"),  # rm -rf, rm -r, rm -f
@@ -74,5 +74,6 @@ def make_terminal_tool() -> Tool:
         summary=_summary,
         read_only=False,
         risk=terminal_risk,
+        preview=lambda args, ctx: Preview("generic", "Run a command on your computer", dict(args)),
         timeout_seconds=460.0,  # the longest command plus starting the computer
     )

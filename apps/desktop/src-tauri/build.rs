@@ -9,6 +9,8 @@ fn main() {
             "auth_logout",
             "api_base_url",
             "app_version",
+            "notify",
+            "set_tray_badge",
         ]),
     ))
     .expect("failed to run tauri-build");

@@ -11,12 +11,21 @@ from urllib.parse import urlsplit
 
 from crew.computer.provider import ComputerError
 from crew.tools.net import Resolver, check_url, system_resolver
-from crew.tools.registry import Args, Risk, Tool, ToolContext, ToolError, ToolOutput
+from crew.tools.registry import Args, Preview, Risk, Tool, ToolContext, ToolError, ToolOutput
 
 PAGE_TEXT_CHARS = 8000
 RISKY_LABEL = re.compile(
     r"\b(send|post|publish|tweet|reply|submit|pay|buy|purchase|order|checkout|subscribe|"
     r"donate|transfer|delete|remove|share|invite|confirm|unsubscribe|deactivate|cancel plan)\b",
+    re.IGNORECASE,
+)
+PURCHASE_LABEL = re.compile(
+    r"\b(pay|buy|purchase|order|checkout|subscribe|donate|transfer)\b", re.IGNORECASE
+)
+# Words that mark a page where submitting a form spends money.
+PAYMENT_PAGE = re.compile(
+    r"\b(checkout|payment|billing|card number|credit card|debit card|place (your )?order|"
+    r"pay now|order total|cvv|cvc)\b",
     re.IGNORECASE,
 )
 ELEMENT = {"type": "integer", "minimum": 1, "description": "The number of the element"}
@@ -41,6 +50,8 @@ def _format(snapshot: dict[str, Any], ctx: ToolContext) -> tuple[str, str]:
     url = str(snapshot.get("url", ""))
     title = str(snapshot.get("title", ""))
     text = str(snapshot.get("text", ""))
+    ctx.computer.page_url = url
+    ctx.computer.page_text = f"{title}\n{text[:PAGE_TEXT_CHARS]}"
     body = text[:PAGE_TEXT_CHARS] + ("\n[page text cut]" if len(text) > PAGE_TEXT_CHARS else "")
     listing = "\n".join(lines) if lines else "(nothing to click or type into)"
     return f"URL: {url}\nTitle: {title}\n\n{body}\n\nElements:\n{listing}", url
@@ -71,6 +82,35 @@ def type_risk(args: Args, ctx: ToolContext) -> Risk:
     return "risky" if args.get("press_enter") and RISKY_LABEL.search(_label(args, ctx)) else "safe"
 
 
+def submit_risk(args: Args, ctx: ToolContext) -> Risk:
+    """Submitting a form is risky on a page that pays, checks out, sends or deletes."""
+    page = f"{ctx.computer.page_url}\n{ctx.computer.page_text}"
+    if PAYMENT_PAGE.search(page):
+        return "risky"
+    # Any send / delete / pay style control on the page: the form may be that one.
+    labels = [_label(args, ctx), *ctx.computer.element_labels.values()]
+    return "risky" if any(RISKY_LABEL.search(label) for label in labels) else "safe"
+
+
+def _action_preview(verb: str) -> Any:
+    def preview(args: Args, ctx: ToolContext) -> Preview:
+        label = _label(args, ctx)[:80]
+        host = _host(ctx.computer.page_url) if ctx.computer.page_url else "the page"
+        page = f"{ctx.computer.page_url}\n{ctx.computer.page_text}"
+        buying = bool(PURCHASE_LABEL.search(label)) or (
+            verb == "Submit the form" and bool(PAYMENT_PAGE.search(page))
+        )
+        what = f"{verb} “{label}”" if label else verb
+        context = {"page": ctx.computer.page_url[:300]}
+        if label:
+            context["item"] = label
+        return Preview(
+            "purchase" if buying else "generic", f"{what} on {host}", dict(args), context
+        )
+
+    return preview
+
+
 def make_browser_tools(resolver: Resolver = system_resolver) -> list[Tool]:
     async def browser_open(args: Args, ctx: ToolContext) -> ToolOutput:
         # Same guard as web_fetch; the computer's own network rules are the second line.
@@ -98,6 +138,11 @@ def make_browser_tools(resolver: Resolver = system_resolver) -> list[Tool]:
         )
         text, url = _format(snapshot, ctx)
         return ToolOutput(text, f"Typed into {label[:60]!r}", source=f"web:{_host(url)}")
+
+    async def browser_submit(args: Args, ctx: ToolContext) -> ToolOutput:
+        label = _label(args, ctx)
+        text, url = _format(await _act(ctx, "submit", element=args["element"]), ctx)
+        return ToolOutput(text, f"Submitted the form at {label[:60]!r}", source=f"web:{_host(url)}")
 
     async def browser_screenshot(args: Args, ctx: ToolContext) -> ToolOutput:
         result = await _act(ctx, "screenshot")
@@ -146,6 +191,7 @@ def make_browser_tools(resolver: Resolver = system_resolver) -> list[Tool]:
             summary=lambda args: f"Clicked element {args.get('element', '?')}",
             read_only=False,
             risk=click_risk,
+            preview=_action_preview("Click"),
             timeout_seconds=200.0,
         ),
         Tool(
@@ -168,6 +214,26 @@ def make_browser_tools(resolver: Resolver = system_resolver) -> list[Tool]:
             summary=lambda args: f"Typed into element {args.get('element', '?')}",
             read_only=False,
             risk=type_risk,
+            preview=_action_preview("Type and press Enter in"),
+            timeout_seconds=200.0,
+        ),
+        Tool(
+            name="browser_submit",
+            description=(
+                "Submit the form that a field belongs to (like pressing Enter in it). Give "
+                "the number of a field in that form."
+            ),
+            input_schema={
+                "type": "object",
+                "properties": {"element": ELEMENT},
+                "required": ["element"],
+                "additionalProperties": False,
+            },
+            handler=browser_submit,
+            summary=lambda args: f"Submitted the form at element {args.get('element', '?')}",
+            read_only=False,
+            risk=submit_risk,
+            preview=_action_preview("Submit the form"),
             timeout_seconds=200.0,
         ),
         Tool(

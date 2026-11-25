@@ -16,6 +16,9 @@ vi.mock("@/lib/tauri", async (importOriginal) => ({
   onAuthChanged: vi.fn(),
   onAuthError: vi.fn(),
   openExternal: vi.fn(),
+  notify: vi.fn(),
+  setTrayBadge: vi.fn(),
+  onOpenApprovals: vi.fn(),
 }));
 
 // No real WebSocket in unit tests; ws.test.ts and live.test.ts cover that layer.
@@ -49,6 +52,7 @@ vi.mock("@novnc/novnc", () => ({
 const mocked = vi.mocked(tauri);
 let emitAuthChanged: (signedIn: boolean) => void = () => {};
 let emitAuthError: (error: tauri.TauriError) => void = () => {};
+let emitOpenApprovals: () => void = () => {};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -101,7 +105,26 @@ const TOOL_CALL = {
   finished_at: "2026-01-01T00:00:01.500Z",
 };
 
+const APPROVAL = {
+  id: "a1",
+  run_id: "run-9",
+  chat_id: "chat-1",
+  bot_id: "bot-1",
+  tool_call_id: "t9",
+  tool: "email_send",
+  title: "Send email to sam@example.com",
+  preview: {
+    kind: "email",
+    fields: { to: "sam@example.com", subject: "Report", body: "The report is ready." },
+    context: {},
+  },
+  status: "pending",
+  created_at: "2026-01-01T00:00:00Z",
+  resolved_at: null,
+};
+
 function fakeApi(initial: {
+  approvals?: (typeof APPROVAL)[];
   bots?: (typeof BOT)[];
   messages?: ReturnType<typeof message>[];
   toolCalls?: (typeof TOOL_CALL)[];
@@ -116,6 +139,7 @@ function fakeApi(initial: {
     last_active_at: null,
   });
   const bots = [...(initial.bots ?? [])];
+  const approvals = [...(initial.approvals ?? [])];
   const messages = [...(initial.messages ?? [])];
   const calls: Call[] = [];
   vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
@@ -128,6 +152,16 @@ function fakeApi(initial: {
       return json({ email: "sam@example.com", name: "Sam", daily_token_budget: 1 });
     }
     if (path === "/bots" && method === "GET") return json(bots);
+    if (path.startsWith("/approvals") && method === "GET") return json(approvals);
+    if (path.startsWith("/approvals/") && method === "POST") {
+      const [, , id, action] = path.split("/");
+      const index = approvals.findIndex((item) => item.id === id);
+      if (index < 0) {
+        return json({ error: { code: "approval_resolved", message: "Already answered." } }, 409);
+      }
+      const [answered] = approvals.splice(index, 1);
+      return json({ ...answered, status: action === "approve" ? "approved" : "rejected" });
+    }
     if (path === "/bots" && method === "POST") {
       const created = { ...BOT, ...(body as object), id: "bot-2", direct_chat_id: "chat-2" };
       created.is_primary = bots.length === 0;
@@ -203,6 +237,12 @@ beforeEach(() => {
   });
   mocked.onAuthError.mockImplementation(async (callback) => {
     emitAuthError = callback;
+    return () => {};
+  });
+  mocked.notify.mockResolvedValue(true);
+  mocked.setTrayBadge.mockResolvedValue();
+  mocked.onOpenApprovals.mockImplementation(async (callback) => {
+    emitOpenApprovals = callback;
     return () => {};
   });
 });
@@ -542,4 +582,152 @@ test("Settings shows the computer and can restart it", async () => {
     expect(paths).toEqual(["/computer/stop", "/computer/start"]);
   });
   expect(within(section).getByRole("status")).toHaveTextContent("Running");
+});
+
+// --- Approvals --------------------------------------------------------------------------
+
+async function openChatWithApproval(approvals = [APPROVAL]) {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [{ ...BOT, working: true }], approvals, activeRunId: "run-9" });
+  render(<App />);
+  await screen.findByRole("log");
+  const card = await screen.findByRole("article", {
+    name: "Approval: Send email to sam@example.com",
+  });
+  return { calls, card };
+}
+
+const posts = (calls: Call[]) =>
+  calls.filter((call) => call.method === "POST").map((call) => [call.path, call.body]);
+
+test("an approval card shows the email and Approve sends it as drafted", async () => {
+  const { calls, card } = await openChatWithApproval();
+  expect(within(card).getByText("Inbox Bot needs your approval")).toBeInTheDocument();
+  expect(within(card).getByText("sam@example.com")).toBeInTheDocument();
+  expect(within(card).getByText("Report")).toBeInTheDocument();
+  expect(within(card).getByText("The report is ready.")).toBeInTheDocument();
+  // The sidebar counts it, the Bot shows it is waiting, and the tray is told.
+  expect(screen.getByLabelText("1 pending")).toBeInTheDocument();
+  expect(screen.getAllByRole("img", { name: "Waiting for you" }).length).toBeGreaterThan(0);
+  await waitFor(() => expect(mocked.setTrayBadge).toHaveBeenLastCalledWith(1));
+
+  fireEvent.click(within(card).getByRole("button", { name: "Approve" }));
+
+  await waitFor(() => expect(posts(calls)).toEqual([["/approvals/a1/approve", {}]]));
+  await waitFor(() => expect(screen.queryByRole("article")).not.toBeInTheDocument());
+  expect(screen.queryByLabelText("1 pending")).not.toBeInTheDocument();
+  await waitFor(() => expect(mocked.setTrayBadge).toHaveBeenLastCalledWith(0));
+});
+
+test("Edit changes the draft and approves the edited version", async () => {
+  const { calls, card } = await openChatWithApproval();
+  fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+
+  const dialog = await screen.findByRole("dialog");
+  expect(within(dialog).getByLabelText("To")).toHaveValue("sam@example.com");
+  fireEvent.change(within(dialog).getByLabelText("Subject"), {
+    target: { value: "Q3 report is ready" },
+  });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Approve with changes" }));
+
+  await waitFor(() =>
+    expect(posts(calls)).toEqual([
+      [
+        "/approvals/a1/approve",
+        {
+          edited_args: {
+            to: "sam@example.com",
+            subject: "Q3 report is ready",
+            body: "The report is ready.",
+          },
+        },
+      ],
+    ]),
+  );
+  await waitFor(() => expect(screen.queryByRole("article")).not.toBeInTheDocument());
+});
+
+test("Reject tells the server and removes the card", async () => {
+  const { calls, card } = await openChatWithApproval();
+  fireEvent.click(within(card).getByRole("button", { name: "Reject" }));
+  await waitFor(() => expect(posts(calls)).toEqual([["/approvals/a1/reject", {}]]));
+  await waitFor(() => expect(screen.queryByRole("article")).not.toBeInTheDocument());
+});
+
+test("an approval without a form is edited as JSON, and bad JSON is not sent", async () => {
+  const generic = {
+    ...APPROVAL,
+    tool: "terminal_run",
+    title: "Run a command on your computer",
+    preview: { kind: "generic", fields: { cmd: "rm -rf build" }, context: {} },
+  };
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], approvals: [generic as unknown as typeof APPROVAL] });
+  render(<App />);
+  const card = await screen.findByRole("article");
+  fireEvent.click(within(card).getByRole("button", { name: "Edit" }));
+  const dialog = await screen.findByRole("dialog");
+  const details = within(dialog).getByLabelText("Details");
+
+  fireEvent.change(details, { target: { value: "{not json" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Approve with changes" }));
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent("not valid JSON");
+  expect(posts(calls)).toEqual([]);
+
+  fireEvent.change(details, { target: { value: '{"cmd": "rm -rf build/tmp"}' } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Approve with changes" }));
+  await waitFor(() =>
+    expect(posts(calls)).toEqual([
+      ["/approvals/a1/approve", { edited_args: { cmd: "rm -rf build/tmp" } }],
+    ]),
+  );
+});
+
+test("the Approvals screen lists everything pending, grouped by Bot", async () => {
+  const other = {
+    ...BOT,
+    id: "bot-2",
+    name: "Social Bot",
+    is_primary: false,
+    direct_chat_id: "chat-2",
+  };
+  const post = {
+    ...APPROVAL,
+    id: "a2",
+    bot_id: "bot-2",
+    chat_id: "chat-2",
+    tool: "social_post",
+    title: "Publish a post",
+    preview: { kind: "post", fields: { text: "We shipped!" }, context: {} },
+  };
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({ bots: [BOT, other], approvals: [APPROVAL, post as unknown as typeof APPROVAL] });
+  render(<App />);
+  await screen.findByRole("log");
+  expect(await screen.findByLabelText("2 pending")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Approvals/ }));
+  const page = await screen.findByRole("region", { name: "Approvals" });
+  const inbox = within(page).getByRole("region", { name: "Inbox Bot" });
+  const social = within(page).getByRole("region", { name: "Social Bot" });
+  expect(within(inbox).getByText("Send email to sam@example.com")).toBeInTheDocument();
+  expect(within(social).getByText("We shipped!")).toBeInTheDocument();
+
+  // "Open chat" goes back to that Bot.
+  fireEvent.click(within(social).getByRole("button", { name: "Open chat" }));
+  expect(await screen.findByRole("heading", { name: /Social Bot/ })).toBeInTheDocument();
+  expect(screen.queryByRole("region", { name: "Approvals" })).not.toBeInTheDocument();
+});
+
+test("the tray menu or a notification opens the Approvals screen", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({ bots: [BOT] });
+  render(<App />);
+  await screen.findByRole("log");
+  await waitFor(() => expect(mocked.onOpenApprovals).toHaveBeenCalled());
+
+  act(() => emitOpenApprovals());
+
+  const page = await screen.findByRole("region", { name: "Approvals" });
+  expect(await within(page).findByText("Nothing is waiting for you.")).toBeInTheDocument();
 });

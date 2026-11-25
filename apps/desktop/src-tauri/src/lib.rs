@@ -6,13 +6,51 @@ mod auth;
 mod secrets;
 mod tray;
 
-use tauri::WindowEvent;
+use tauri::{Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
 use tauri_plugin_window_state::StateFlags;
 
 #[tauri::command]
 fn app_version(app: tauri::AppHandle) -> String {
     app.package_info().version.to_string()
+}
+
+/// Shows a desktop notification unless the user is already looking at Crew.
+/// Returns whether one was shown.
+#[tauri::command]
+fn notify(app: tauri::AppHandle, title: String, body: String) -> bool {
+    use tauri_plugin_notification::NotificationExt;
+
+    let (visible, focused) = app
+        .get_webview_window("main")
+        .map(|window| {
+            (
+                window.is_visible().unwrap_or(false),
+                window.is_focused().unwrap_or(false),
+            )
+        })
+        .unwrap_or((false, false));
+    if !tray::should_notify(visible, focused) {
+        return false;
+    }
+    let title: String = title.chars().take(120).collect();
+    let body: String = body.chars().take(300).collect();
+    match app.notification().builder().title(title).body(body).show() {
+        Ok(()) => {
+            tray::remember_notification(&app);
+            true
+        }
+        Err(error) => {
+            log::warn!("could not show a notification: {error}");
+            false
+        }
+    }
+}
+
+/// Pending approvals count for the tray tooltip and menu.
+#[tauri::command]
+fn set_tray_badge(app: tauri::AppHandle, count: u32) {
+    tray::set_badge(&app, count);
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -78,10 +116,14 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                // Keep running in the tray so notifications still arrive.
-                api.prevent_close();
-                let _ = window.hide();
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
+                    // Keep running in the tray so notifications still arrive.
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+                WindowEvent::Focused(true) => tray::window_focused(window.app_handle()),
+                _ => {}
             }
         })
         .invoke_handler(tauri::generate_handler![
@@ -91,6 +133,8 @@ pub fn run() {
             auth::auth_logout,
             auth::api_base_url,
             app_version,
+            notify,
+            set_tray_badge,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Crew");
@@ -99,13 +143,15 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     /// Commands declared in build.rs. Each needs an `allow-...` line in the capability.
-    const COMMANDS: [&str; 6] = [
+    const COMMANDS: [&str; 8] = [
         "auth_start_login",
         "auth_get_tokens",
         "auth_get_access_token",
         "auth_logout",
         "api_base_url",
         "app_version",
+        "notify",
+        "set_tray_badge",
     ];
 
     fn permissions() -> Vec<String> {
@@ -130,7 +176,7 @@ mod tests {
     }
 
     #[test]
-    fn capability_allows_nothing_beyond_what_phase_1_needs() {
+    fn capability_allows_nothing_beyond_what_the_app_needs() {
         let mut expected: Vec<String> = COMMANDS
             .iter()
             .map(|c| format!("allow-{}", c.replace('_', "-")))

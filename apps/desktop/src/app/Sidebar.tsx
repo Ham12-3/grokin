@@ -1,4 +1,4 @@
-import { LogOut, Plus, Star } from "lucide-react";
+import { Inbox, LogOut, Plus, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -14,6 +14,11 @@ interface SidebarProps {
   bots: Bot[];
   selectedId: string | null;
   isWorking: (bot: Bot) => boolean;
+  /** Bots with something waiting for the user's approval. */
+  waitingBotIds: Set<string>;
+  pendingApprovals: number;
+  approvalsOpen: boolean;
+  onOpenApprovals: () => void;
   userLabel: string;
   onSelect: (botId: string) => void;
   onNewBot: () => void;
@@ -24,6 +29,10 @@ export function Sidebar({
   bots,
   selectedId,
   isWorking,
+  waitingBotIds,
+  pendingApprovals,
+  approvalsOpen,
+  onOpenApprovals,
   userLabel,
   onSelect,
   onNewBot,
@@ -48,6 +57,29 @@ export function Sidebar({
         </DropdownMenu>
       </div>
 
+      <div className="px-2 pb-2">
+        <button
+          type="button"
+          aria-current={approvalsOpen ? "page" : undefined}
+          onClick={onOpenApprovals}
+          className={cn(
+            "hover:bg-sidebar-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+            approvalsOpen && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <Inbox aria-hidden className="size-4" />
+          <span className="flex-1">Approvals</span>
+          {pendingApprovals > 0 && (
+            <span
+              aria-label={`${pendingApprovals} pending`}
+              className="rounded-full bg-amber-500 px-1.5 text-xs font-medium text-white"
+            >
+              {pendingApprovals}
+            </span>
+          )}
+        </button>
+      </div>
+
       <nav aria-label="Bots" className="flex-1 overflow-y-auto px-2">
         <p className="text-muted-foreground px-2 py-1 text-xs font-medium tracking-wide uppercase">
           Bots
@@ -60,11 +92,11 @@ export function Sidebar({
             <li key={bot.id}>
               <button
                 type="button"
-                aria-current={bot.id === selectedId ? "page" : undefined}
+                aria-current={bot.id === selectedId && !approvalsOpen ? "page" : undefined}
                 onClick={() => onSelect(bot.id)}
                 className={cn(
                   "hover:bg-sidebar-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                  bot.id === selectedId && "bg-sidebar-accent font-medium",
+                  bot.id === selectedId && !approvalsOpen && "bg-sidebar-accent font-medium",
                 )}
               >
                 <span aria-hidden>{bot.avatar ?? "🤖"}</span>
@@ -72,7 +104,7 @@ export function Sidebar({
                 {bot.is_primary && (
                   <Star aria-label="Primary Bot" className="size-3 fill-current text-amber-500" />
                 )}
-                <StatusDot working={isWorking(bot)} />
+                <StatusDot working={isWorking(bot)} waiting={waitingBotIds.has(bot.id)} />
               </button>
             </li>
           ))}

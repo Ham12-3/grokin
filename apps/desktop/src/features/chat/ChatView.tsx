@@ -1,19 +1,24 @@
+import { useQueryClient } from "@tanstack/react-query";
 import { PanelRight, Star } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Composer } from "./Composer";
 import { MessageList } from "./MessageList";
 import { cancelRun, flattenMessages, toolCallsByRun, useMessages, useSendMessage } from "./api";
 import { Button } from "@/components/ui/button";
+import { ApprovalCard } from "@/features/approvals/ApprovalCard";
+import type { Approval } from "@/features/approvals/api";
 import type { Bot } from "@/features/bots/api";
 import { StatusDot } from "@/features/bots/StatusDot";
 import { subscribeChat } from "@/features/realtime/connection";
-import { clearChatError, useLiveStore } from "@/features/realtime/live";
+import { clearChatError, dropChatStreaming, useLiveStore } from "@/features/realtime/live";
 import { errorMessage } from "@/lib/tauri";
 
 interface ChatViewProps {
   bot: Bot;
   chatId: string;
   working: boolean;
+  /** Actions in this chat that wait for the user's answer. */
+  approvals: Approval[];
   onToggleDetails: () => void;
   /** Opens the Screen tab with the user in control. */
   onOpenScreen: () => void;
@@ -24,6 +29,7 @@ export function ChatView({
   bot,
   chatId,
   working,
+  approvals,
   onToggleDetails,
   onOpenScreen,
   onGiveBack,
@@ -69,7 +75,14 @@ export function ChatView({
   const { fetchNextPage } = messages;
   const loadOlder = useCallback(() => void fetchNextPage(), [fetchNextPage]);
 
-  useEffect(() => subscribeChat(chatId), [chatId]);
+  const queryClient = useQueryClient();
+  useEffect(() => {
+    const unsubscribe = subscribeChat(chatId);
+    return () => {
+      unsubscribe();
+      dropChatStreaming(queryClient, chatId);
+    };
+  }, [chatId, queryClient]);
 
   const sendError = sendMessage.isError ? errorMessage(sendMessage.error) : null;
   const error = sendError ?? runError;
@@ -86,7 +99,7 @@ export function ChatView({
             {bot.is_primary && (
               <Star aria-label="Primary Bot" className="size-3 fill-current text-amber-500" />
             )}
-            <StatusDot working={working} />
+            <StatusDot working={working} waiting={approvals.length > 0} />
           </h2>
           <p className="text-muted-foreground truncate text-xs">{bot.job}</p>
         </div>
@@ -135,6 +148,13 @@ export function ChatView({
           <Button size="sm" variant="outline" onClick={() => onGiveBack(activeRunId)}>
             Give back
           </Button>
+        </div>
+      )}
+      {approvals.length > 0 && (
+        <div className="mx-4 mb-2 space-y-2">
+          {approvals.map((approval) => (
+            <ApprovalCard key={approval.id} approval={approval} botName={bot.name} />
+          ))}
         </div>
       )}
       {working && computerStatus === "starting" && (

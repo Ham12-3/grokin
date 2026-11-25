@@ -4,8 +4,8 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 4 (cloud computer + live screen): built and verified end to end on Linux. Waiting for
-your hands-on check in the desktop app on Windows before phase 5 starts.
+Phase 5 (approvals + notifications): built and verified on Linux. Waiting for your hands-on
+check in the desktop app on Windows (with phase 4) before phase 6 starts.
 
 ## Done
 
@@ -186,11 +186,71 @@ Verified on 2026-11-25 (Linux, Docker 29, real containers)
 - The container exit seen earlier on the Windows machine did not happen here. If it does
   again, `docker logs crew-computer-<user id>` shows why (`start.sh` prints its reason).
 
+### Phase 5: approvals + notifications
+
+Backend
+
+- Migration `0006`: `approvals`, `connector_log` (what the test connectors "sent") and
+  `runs.pending_results`.
+- A call that needs approval creates an `approvals` row, the run stops as
+  `waiting_approval` and `approval.created` is published. Nothing runs.
+- `GET /approvals?status=`, `POST /approvals/{id}/approve` (optional `edited_args`, checked
+  against the tool's schema) and `POST /approvals/{id}/reject`. Both queue the run again;
+  the loop continues from the database: tools that already ran in that step are not
+  repeated, and the same reply message continues.
+- `crew/approvals/gate.py`: every tool execution in the worker goes through it. A risky call
+  runs only with an `approved` row of the same user, and that row works once.
+- Reject tells the Bot the user said no. Stop while waiting cancels the run and expires the
+  approval. A chat stays busy while its Bot waits for an answer.
+- Test connectors `email_send` and `social_post` (always risky; they only write to
+  `connector_log`). `browser_submit` is risky on payment, checkout, send and delete pages.
+- Approve and reject are written to `audit_log`.
+
+Desktop
+
+- Approval card in the chat (email, post, purchase, or the raw details), with Approve,
+  Edit and Reject. Edit opens a form (or JSON for other tools) and approves the changed
+  version.
+- Approvals screen (all pending, grouped by Bot), sidebar row with a count, amber
+  "Waiting for you" dot, Ctrl/Cmd+Shift+A.
+- Rust `notify` and `set_tray_badge` commands; tray item "Pending approvals (n)" and the
+  count in the tray tooltip. A notification is shown only when the window is hidden or
+  not in front.
+
+Dev mode (`LLM_PROVIDER=fake`): a message with `email` and an address drafts an email for
+approval.
+
+Verified on 2026-11-25 (Linux)
+
+- Backend: 215 tests pass, including the worker bypass test (pending, rejected, expired,
+  missing and another user's approval are all refused) and the 9 real-container tests.
+- API + worker + the real frontend in a browser (Rust core stubbed): an email request showed
+  the card; Edit changed the subject; after approving, `connector_log` held the edited
+  subject exactly once. A second email rejected from the Approvals screen was not sent and
+  the Bot said so. The notify and tray-badge calls were made with the right text and counts.
+- Not verified here: the real desktop notification and tray on Windows (the Rust code
+  compiles and its logic is unit-tested, but it has only run on Linux without a display),
+  and real Claude going through an approval.
+
 ## Next
 
-- Phase 5: approvals + notifications (`prompts/phase-05-approvals.md`).
+- Phase 6: memory + skills (`prompts/phase-06-memory-skills.md`).
 
 ## Shortcuts taken (to revisit)
+
+- Clicking a notification does not open the approval by itself: Tauri's notification plugin
+  has no click event on desktop. Instead, after a notification the Approvals screen opens
+  the next time the Crew window comes to the front, and the tray has "Pending approvals".
+- Approvals never expire on their own; a waiting run keeps its chat busy until you answer
+  or press Stop.
+- Approval cards are not stored as chat messages (`messages.card`): the chat shows pending
+  ones from the approvals list, and the step row shows how each ended.
+- `resume_from_tool_call_id` is not passed to the worker: the loop finds the waiting call
+  in the database, which is the same information and cannot disagree with it.
+- A browser click approved after a wait runs against the page as it is then; if the page
+  changed, the element number may no longer match and the click fails with a clear error.
+- `browser_submit` was not run against a real page in a container (unit and fake-provider
+  tests only).
 
 - Browser logins are kept per screen, not shared between the six screens: Chromium cannot
   share one profile between running copies. A Bot working alone always gets screen 1, so its
@@ -211,8 +271,6 @@ Verified on 2026-11-25 (Linux, Docker 29, real containers)
   not been driven against real Claude yet, only against `FakeLLM`.
 - `web_search` has not run against the real Brave API (no `SEARCH_API_KEY`); it is tested
   with a stubbed response. Without a key the tool tells the model to use `web_fetch`.
-- A call that needs approval is refused, not queued. `always_ask` Bots therefore cannot
-  write files until phase 5.
 - Raw tool arguments are stored in `tool_calls.args` but not returned by the API yet.
 - Earlier runs' tool results are not replayed to the model in later turns; it sees the
   earlier replies as text only.
@@ -297,3 +355,7 @@ Verified on 2026-11-25 (Linux, Docker 29, real containers)
 | 2026-11-25 | A run counts as alive by `updated_at` heartbeats, and `paused` counts as active | A long Take over must not look like a dead run. |
 | 2026-11-25 | Chromium starts with `--hide-crash-restore-bubble` | Stopping the computer kills the browser; the "Restore pages?" bubble covered the page afterwards. |
 | 2026-11-25 | Computer controls appear in Settings as well as the Screen tab | `prompts/phase-04` asks for Settings; the Screen tab is where you need them while watching. |
+| 2026-11-25 | The approval check lives in one gate that every tool execution passes | The worker refuses a risky call without an approved row even if the loop is wrong. |
+| 2026-11-25 | An approved row is claimed in one UPDATE and works once | A re-queued or repeated job cannot send the same email twice. |
+| 2026-11-25 | Risky calls in one step are asked one at a time | Each card is answered knowing what already happened. |
+| 2026-11-25 | `approvals` has extra columns: `chat_id`, `tool`, `reason`, `executed_at` | Cards need the chat and tool without joins; `executed_at` is the once-only mark. |

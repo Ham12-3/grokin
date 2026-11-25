@@ -1,15 +1,20 @@
 import { cn } from "@/lib/utils";
 
-/** Idle or working. "Waiting for you" arrives with approvals. */
-export function StatusDot({ working }: { working: boolean }) {
+/** Idle, working, or waiting for the user's approval. */
+export function StatusDot({ working, waiting = false }: { working: boolean; waiting?: boolean }) {
+  const label = waiting ? "Waiting for you" : working ? "Working" : "Idle";
   return (
     <span
       role="img"
-      aria-label={working ? "Working" : "Idle"}
-      title={working ? "Working" : "Idle"}
+      aria-label={label}
+      title={label}
       className={cn(
         "inline-block size-2 shrink-0 rounded-full",
-        working ? "animate-pulse bg-emerald-500" : "bg-muted-foreground/40",
+        waiting
+          ? "bg-amber-500"
+          : working
+            ? "animate-pulse bg-emerald-500"
+            : "bg-muted-foreground/40",
       )}
     />
   );

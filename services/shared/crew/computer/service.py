@@ -228,6 +228,8 @@ class RunComputer:
         self._display: int | None = None
         # Labels of the elements on the page the Bot last read, by id (for risk checks).
         self.element_labels: dict[int, str] = {}
+        self.page_url = ""
+        self.page_text = ""
 
     async def handle(self) -> ComputerHandle:
         if self._handle is None:

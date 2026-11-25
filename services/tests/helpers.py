@@ -105,6 +105,8 @@ class StubComputer:
     def __init__(self, provider: ComputerProvider, user_id: uuid.UUID) -> None:
         self.provider = provider
         self.element_labels: dict[int, str] = {}
+        self.page_url = ""
+        self.page_text = ""
         self._user_id = user_id
         self.displays_taken = 0
 

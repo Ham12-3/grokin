@@ -91,6 +91,17 @@ export function MessageList({
     if (element) previousHeight.current = element.scrollHeight;
   }, [lastId, liveLength]);
 
+  // Something below the list (an approval card) can make it shorter: stay at the bottom.
+  useEffect(() => {
+    const element = scroller.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (stickToBottom.current) element.scrollTop = element.scrollHeight;
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
+
   // Load older messages when the top comes into view.
   useEffect(() => {
     const sentinel = topSentinel.current;

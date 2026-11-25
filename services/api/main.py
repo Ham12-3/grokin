@@ -14,7 +14,7 @@ from redis.asyncio import Redis
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import ws
-from api.routers import auth, bots, chats, computer, runs
+from api.routers import approvals, auth, bots, chats, computer, runs
 from crew import __version__
 from crew.auth.mailer import create_mailer
 from crew.auth.tokens import require_jwt_secret
@@ -24,6 +24,7 @@ from crew.db import create_engine, create_session_factory
 from crew.errors import AppError
 from crew.health import get_health
 from crew.schemas.health import HealthResponse
+from crew.tools import default_registry
 
 API_PREFIX = get_settings().api_prefix
 
@@ -42,6 +43,7 @@ router.include_router(bots.router)
 router.include_router(chats.router)
 router.include_router(runs.router)
 router.include_router(computer.router)
+router.include_router(approvals.router)
 router.include_router(ws.router)
 
 
@@ -79,6 +81,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.http = httpx.AsyncClient(timeout=settings.http_timeout_seconds)
     app.state.mailer = create_mailer(settings)
     app.state.provider = create_provider(settings)
+    # Only to check edited approval arguments against tool schemas; the API runs no tools.
+    app.state.registry = default_registry()
     app.state.queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         yield

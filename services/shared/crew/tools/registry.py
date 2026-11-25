@@ -15,6 +15,7 @@ from typing import Any, Literal, Protocol
 import httpx
 import jsonschema
 import structlog
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from crew.computer.provider import ComputerHandle, ComputerProvider
 from crew.config import Settings
@@ -39,6 +40,9 @@ class ComputerAccess(Protocol):
 
     provider: ComputerProvider
     element_labels: dict[int, str]
+    # Address and text of the page the Bot last read (for risk checks and previews).
+    page_url: str
+    page_text: str
 
     async def handle(self) -> ComputerHandle: ...
 
@@ -55,6 +59,8 @@ class ToolContext:
     computer: ComputerAccess
     # Pauses the run until the user gives control back (see `request_takeover`).
     takeover: Takeover
+    # For the few tools that write to the database themselves (the fake connectors).
+    session_factory: async_sessionmaker[AsyncSession] | None = None
 
 
 @dataclass(frozen=True)
@@ -75,6 +81,23 @@ class ToolResult:
     summary: str
 
 
+PreviewKind = Literal["email", "post", "purchase", "generic"]
+
+
+@dataclass(frozen=True)
+class Preview:
+    """What the user sees on an approval card.
+
+    `fields` are the tool's arguments: the user may edit them before approving. `context`
+    is extra, read-only detail (for example which page a click is on).
+    """
+
+    kind: PreviewKind
+    title: str
+    fields: Args
+    context: dict[str, str] = field(default_factory=dict)
+
+
 def _always_safe(_: Args, __: ToolContext) -> Risk:
     return "safe"
 
@@ -88,8 +111,16 @@ class Tool:
     summary: Callable[[Args], str]
     read_only: bool
     risk: Callable[[Args, ToolContext], Risk] = _always_safe
+    # How an approval card for this tool looks. Without one the card shows the arguments.
+    preview: Callable[[Args, ToolContext], Preview] | None = None
     timeout_seconds: float = 30.0
     max_output_chars: int = 20_000
+
+
+def preview_for(tool: Tool, args: Args, ctx: ToolContext) -> Preview:
+    if tool.preview is not None:
+        return tool.preview(args, ctx)
+    return Preview("generic", f"Allow {tool.name.replace('_', ' ')}", dict(args))
 
 
 def wrap_untrusted(text: str, source: str) -> str:

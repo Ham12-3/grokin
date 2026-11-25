@@ -60,6 +60,7 @@ from alembic.config import Config  # noqa: E402
 from api.main import create_app  # noqa: E402
 from crew.computer.local_provider import LocalProvider  # noqa: E402
 from crew.config import Settings, get_settings  # noqa: E402
+from crew.tools import default_registry  # noqa: E402
 
 SERVICES_DIR = Path(__file__).resolve().parents[1]
 
@@ -175,7 +176,8 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
         await conn.execute(
             text(
                 "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
-                "messages, runs, tool_calls, usage_daily, computers CASCADE"
+                "messages, runs, tool_calls, usage_daily, computers, approvals, connector_log "
+                "CASCADE"
             )
         )
 
@@ -191,6 +193,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     app.state.session_factory = session_factory
     app.state.queue = queue
     app.state.provider = LocalProvider(settings)
+    app.state.registry = default_registry()
     app.state.redis = redis
     app.state.http = http
     app.state.mailer = mailer
