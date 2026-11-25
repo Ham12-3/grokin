@@ -5,6 +5,7 @@ import json
 import re
 import uuid
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -12,16 +13,130 @@ import httpx
 
 from crew.agent.loop import run_agent
 from crew.auth.tokens import new_token, pkce_challenge
+from crew.computer.local_provider import LocalProvider
+from crew.computer.provider import (
+    ComputerError,
+    ComputerHandle,
+    ComputerProvider,
+    ComputerState,
+    ExecResult,
+)
 from crew.config import Settings
 from crew.llm.base import LLM, LLMError
 from crew.tools import default_registry
-from crew.tools.registry import ToolRegistry
+from crew.tools.registry import ToolContext, ToolRegistry
 from tests.conftest import Ctx
 
 API = "/api/v1"
 PUBLIC_IP = "93.184.216.34"
 
 Handler = Callable[[httpx.Request], httpx.Response]
+
+SNAPSHOT: dict[str, Any] = {
+    "title": "Example",
+    "url": "https://example.com/",
+    "text": "Welcome to Example.",
+    "elements": [
+        {"id": 1, "tag": "a", "type": "", "label": "More information"},
+        {"id": 2, "tag": "input", "type": "text", "label": "Search"},
+        {"id": 3, "tag": "button", "type": "submit", "label": "Send message"},
+    ],
+}
+
+
+class FakeProvider(LocalProvider):
+    """Files on disk like LocalProvider, plus a scripted terminal, browser and screen."""
+
+    name = "fake"
+
+    def __init__(self, settings: Settings) -> None:
+        super().__init__(settings)
+        self.running: set[uuid.UUID] = set()
+        self.ensured = 0
+        self.stopped = 0
+        self.commands: list[str] = []
+        self.displays: list[int] = []
+        self.browser_calls: list[tuple[int, str, dict[str, Any]]] = []
+        self.snapshot: dict[str, Any] = SNAPSHOT
+        self.exec_result = ExecResult(0, "hello\n", "", False)
+        self.fail_start: str | None = None
+        self.vnc: str | None = None
+
+    async def ensure(self, user_id: uuid.UUID) -> ComputerHandle:
+        if self.fail_start is not None:
+            raise ComputerError(self.fail_start)
+        self.ensured += 1
+        self.running.add(user_id)
+        return ComputerHandle(user_id, "fake://", "test-only-token")
+
+    async def stop(self, user_id: uuid.UUID) -> None:
+        self.stopped += 1
+        self.running.discard(user_id)
+
+    async def state(self, user_id: uuid.UUID) -> ComputerState:
+        return "running" if user_id in self.running else "stopped"
+
+    async def exec(
+        self, handle: ComputerHandle, cmd: str, timeout_s: float, display: int | None = None
+    ) -> ExecResult:
+        self.commands.append(cmd)
+        return self.exec_result
+
+    async def start_display(self, handle: ComputerHandle, display: int) -> None:
+        self.displays.append(display)
+
+    async def browser(
+        self, handle: ComputerHandle, display: int, action: str, **args: Any
+    ) -> dict[str, Any]:
+        self.browser_calls.append((display, action, args))
+        if action == "screenshot":
+            return {"path": "/workspace/outputs/screenshots/screen-1.png", "size": 10}
+        return self.snapshot
+
+    def vnc_url(self, handle: ComputerHandle, display: int) -> str:
+        if self.vnc is None:
+            raise ComputerError("no screen in this test")
+        return f"{self.vnc}/{display}"
+
+
+class StubComputer:
+    """Stands in for RunComputer in tool tests that have no database."""
+
+    def __init__(self, provider: ComputerProvider, user_id: uuid.UUID) -> None:
+        self.provider = provider
+        self.element_labels: dict[int, str] = {}
+        self._user_id = user_id
+        self.displays_taken = 0
+
+    async def handle(self) -> ComputerHandle:
+        return await self.provider.ensure(self._user_id)
+
+    async def display(self) -> int:
+        self.displays_taken += 1
+        return 1
+
+
+async def _no_takeover(reason: str) -> None:
+    raise AssertionError("takeover not expected in this test")
+
+
+def tool_context(
+    http: httpx.AsyncClient,
+    workspace: Path,
+    provider: ComputerProvider | None = None,
+    **overrides: object,
+) -> ToolContext:
+    """A ToolContext for tool tests: local files under `workspace`, no database."""
+    settings = Settings(_env_file=None, workspaces_dir=str(workspace), **overrides)  # type: ignore[arg-type]
+    user_id = uuid.uuid4()
+    return ToolContext(
+        user_id=user_id,
+        run_id=uuid.uuid4(),
+        settings=settings,
+        http=http,
+        computer=StubComputer(provider or LocalProvider(settings), user_id),
+        takeover=_no_takeover,
+    )
 
 
 def bearer(token: str) -> dict[str, str]:
@@ -93,6 +208,7 @@ async def run_worker(
     registry: ToolRegistry | None = None,
     web: Handler = no_web,
     settings: Settings | None = None,
+    provider: ComputerProvider | None = None,
 ) -> str:
     """Runs the queued job the way the ARQ worker would. `web` answers outgoing requests."""
     async with httpx.AsyncClient(transport=httpx.MockTransport(web)) as http:
@@ -104,6 +220,7 @@ async def run_worker(
             llm=llm,
             registry=registry or default_registry(public_resolver),
             http=http,
+            provider=provider or ctx.app.state.provider,
             llm_error=llm_error,
         )
 

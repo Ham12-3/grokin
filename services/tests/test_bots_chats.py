@@ -174,7 +174,7 @@ async def test_a_dead_run_does_not_block_the_chat_forever(ctx: Ctx) -> None:
     bot = await create_bot(ctx, me)
     await send(ctx, me, bot["direct_chat_id"], "one")
     async with ctx.engine.begin() as conn:
-        await conn.execute(text("UPDATE runs SET created_at = now() - interval '1 hour'"))
+        await conn.execute(text("UPDATE runs SET updated_at = now() - interval '1 hour'"))
     await send(ctx, me, bot["direct_chat_id"], "two")
     bots = (await ctx.client.get(f"{API}/bots", headers=me)).json()
     assert bots[0]["working"] is True  # because of the new run only

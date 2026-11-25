@@ -264,3 +264,31 @@ test("a run stopped before it said anything leaves no empty bubble", () => {
   });
   expect(contents(queryClient)).toEqual(["hi"]);
 });
+
+test("a paused run still counts as working and can still be stopped", () => {
+  const queryClient = seeded([]);
+  handleEvent(queryClient, {
+    type: "run.status",
+    chat_id: CHAT,
+    bot_id: BOT,
+    run_id: "run-1",
+    status: "paused",
+    takeover: true,
+    reason: "Please sign in",
+  });
+  expect(useLiveStore.getState().working[BOT]).toBe(true);
+  expect(useLiveStore.getState().runs[CHAT]).toBe("run-1");
+});
+
+test("computer status events update the store and the cached computer", () => {
+  const queryClient = seeded([]);
+  queryClient.setQueryData(["computer"], {
+    id: "c1",
+    status: "stopped",
+    provider: "docker",
+    last_active_at: null,
+  });
+  handleEvent(queryClient, { type: "computer.status", computer_id: "c1", status: "starting" });
+  expect(useLiveStore.getState().computer).toBe("starting");
+  expect(queryClient.getQueryData<{ status: string }>(["computer"])?.status).toBe("starting");
+});

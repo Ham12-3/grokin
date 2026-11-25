@@ -81,6 +81,7 @@ class FakeLLM:
             self.script = [turn for turn in script if isinstance(turn, Turn)]
         self.delay_seconds = delay_seconds
         self.calls: list[dict[str, Any]] = []
+        self.chunks_sent = 0
 
     async def stream(
         self,
@@ -109,6 +110,7 @@ class FakeLLM:
                 await asyncio.sleep(self.delay_seconds)
             await on_delta(chunk)
             sent.append(chunk)
+            self.chunks_sent += 1
         text = "".join(sent)
         content: list[dict[str, Any]] = [{"type": "text", "text": text}] if text else []
         content += [

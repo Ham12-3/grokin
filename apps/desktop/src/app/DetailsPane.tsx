@@ -1,35 +1,67 @@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { BotSettings } from "@/features/bots/BotSettings";
 import type { Bot } from "@/features/bots/api";
+import { ScreenPanel } from "@/features/computer/ScreenPanel";
 
 // Empty for now; each fills in with its phase.
 const LATER_TABS = [
-  { value: "screen", label: "Screen", text: "The Bot's live screen appears here." },
   { value: "memory", label: "Memory", text: "What this Bot remembers about you." },
   { value: "skills", label: "Skills", text: "Saved procedures this Bot can run." },
   { value: "routines", label: "Routines", text: "Skills on a schedule or trigger." },
   { value: "apps", label: "Apps", text: "The apps this Bot may use." },
 ];
 
-export function DetailsPane({ bot, onDeleted }: { bot: Bot; onDeleted: () => void }) {
+export type DetailsTab = "screen" | "memory" | "skills" | "routines" | "apps" | "settings";
+
+interface DetailsPaneProps {
+  bot: Bot;
+  tab: DetailsTab;
+  onTabChange: (tab: DetailsTab) => void;
+  activeRunId: string | undefined;
+  interactive: boolean;
+  onInteractiveChange: (interactive: boolean) => void;
+  onDeleted: () => void;
+}
+
+export function DetailsPane({
+  bot,
+  tab,
+  onTabChange,
+  activeRunId,
+  interactive,
+  onInteractiveChange,
+  onDeleted,
+}: DetailsPaneProps) {
   return (
     <aside
       aria-label="Details"
       className="border-border flex w-[360px] shrink-0 flex-col overflow-y-auto border-l p-3"
     >
-      <Tabs defaultValue="settings">
+      <Tabs value={tab} onValueChange={(value) => onTabChange(value as DetailsTab)}>
         <TabsList className="flex w-full flex-wrap">
-          {LATER_TABS.map((tab) => (
-            <TabsTrigger key={tab.value} value={tab.value}>
-              {tab.label}
+          <TabsTrigger value="screen">Screen</TabsTrigger>
+          {LATER_TABS.map((item) => (
+            <TabsTrigger key={item.value} value={item.value}>
+              {item.label}
             </TabsTrigger>
           ))}
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
-        {LATER_TABS.map((tab) => (
-          <TabsContent key={tab.value} value={tab.value}>
+        <TabsContent value="screen">
+          {/* Mounted only while shown, so the live connection closes with the tab. */}
+          {tab === "screen" && (
+            <ScreenPanel
+              bot={bot}
+              activeRunId={activeRunId}
+              interactive={interactive}
+              onInteractiveChange={onInteractiveChange}
+            />
+          )}
+        </TabsContent>
+        {LATER_TABS.map((item) => (
+          <TabsContent key={item.value} value={item.value}>
             <p className="text-muted-foreground p-4 text-center text-sm">
-              {tab.text} Not available yet.
+              {item.text} Not available yet.
             </p>
           </TabsContent>
         ))}

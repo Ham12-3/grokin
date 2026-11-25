@@ -4,7 +4,7 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 3 (agent loop + first tools): built, waiting for your hands-on check.
+Phase 4 (cloud computer + live screen): built, waiting for your hands-on check.
 
 ## Done
 
@@ -122,19 +122,71 @@ Desktop
 - Stop button while a run is going.
 - "Details" under each reply: status, steps, tools, tokens, duration.
 
+### Phase 4: cloud computer + live screen
+
+The computer
+
+- `infra/computer`: Ubuntu image with Xvfb, Fluxbox, x11vnc, Playwright's Chromium and a
+  control server (`control_server.py`) on port 7000, protected by a per-computer token.
+  Build it with `make computer-image`.
+- `start.sh` blocks private networks and the cloud metadata address with iptables (DNS to
+  Docker's resolver is allowed), then drops to the unprivileged `crew` user for good.
+- Screens start on demand, one per display (1 to 6): Xvfb, window manager, VNC, Chromium
+  with a persistent profile.
+- Only the control port is published, and only on 127.0.0.1. Commands, files, the browser
+  (Playwright over CDP, inside the machine) and the live screen all go through the control
+  server.
+
+Backend
+
+- Migration `0005`: `computers`.
+- `ComputerProvider` with `DockerProvider` (one container per user, named volumes for
+  `/workspace` and the browser profile, CPU / memory / process limits, capabilities dropped),
+  `LocalProvider` (files only: used by tests and by servers without Docker) and an
+  `E2BProvider` stub with TODOs.
+- Screen allocation in Redis per user; released when the run ends.
+- File tools now run on the computer. New tools: `terminal_run`, `browser_open`,
+  `browser_read`, `browser_click`, `browser_type`, `browser_screenshot`, `request_takeover`.
+  Risky terminal commands and clicks on send / pay / delete style buttons are refused by the
+  approval gate.
+- `GET /computer`, `POST /computer/start|stop`, `computer.status` events, idle auto-pause
+  every minute (`COMPUTER_IDLE_MINUTES`).
+- `WS /computer/{id}/vnc?bot_id=`: token in the subprotocol, owner-only, piped to the Bot's
+  screen.
+- `POST /runs/{id}/pause` and `/resume`; a paused run sends heartbeats and can be cancelled.
+
+Desktop
+
+- Screen tab: computer status, Start / Stop / Restart, the live noVNC view (watch-only by
+  default), Take over / Give back.
+- Takeover card in the chat with Open screen and Give back.
+- "Starting your computer..." notice in the chat.
+
 ## Next
 
-- Phase 4: cloud computer + live screen (`prompts/phase-04-cloud-computer.md`).
+- Phase 5: approvals + notifications (`prompts/phase-05-approvals.md`).
 
 ## Shortcuts taken (to revisit)
 
-- Claude itself has still not been called: no `ANTHROPIC_API_KEY` is set, so the loop and
-  tool use were verified with `FakeLLM` only. The first real run needs a check of
-  `crew/llm/anthropic_llm.py`, in particular replaying assistant turns (thinking blocks)
-  from `runs.transcript`.
+- Browser logins are kept per screen, not shared between the six screens: Chromium cannot
+  share one profile between running copies. A Bot working alone always gets screen 1, so its
+  logins persist; a second Bot working at the same time has its own.
+- `browser_screenshot` saves a PNG to `/workspace/outputs/screenshots`; the Bot cannot look
+  at the picture itself yet.
+- Take over is enforced in the app only: the screen is watch-only until you press Take over,
+  but the server does not filter input.
+- Take over pauses the Bot before its next step or tool, not in the middle of a reply.
+- The computer image has no `ffmpeg` (the spec lists it); add it when a task needs it.
+- Computer status and Start / Stop live in the Screen tab; there is no app-wide Settings
+  screen yet.
+- `E2BProvider` is a stub. `/workspace` uploads from the composer (attach) are not built.
+- The idle auto-pause was tested with a fake computer, not timed against a real container.
+
+- Real Claude was verified on 2026-11-25 with `services/scripts/smoke_live.py` (a plain
+  reply and a fetch-then-write tool loop on `claude-opus-5-5`). The desktop app itself has
+  not been driven against real Claude yet, only against `FakeLLM`.
 - `web_search` has not run against the real Brave API (no `SEARCH_API_KEY`); it is tested
   with a stubbed response. Without a key the tool tells the model to use `web_fetch`.
-- Pause and resume are not built (phase 4 Take over uses them). Only cancel exists.
 - A call that needs approval is refused, not queued. `always_ask` Bots therefore cannot
   write files until phase 5.
 - Raw tool arguments are stored in `tool_calls.args` but not returned by the API yet.
@@ -164,8 +216,9 @@ Desktop
 
 - A failed step still reads "Opened example.com" (with a warning icon and the reason
   when expanded): step summaries are written before the tool runs.
-- Files are on the backend machine's disk for now; they move to the cloud computer in
-  phase 4.
+- The first tool that needs the computer waits for it to start (about 10 to 40 seconds).
+- With `COMPUTER_PROVIDER=docker`, every user's container runs on this machine and asks
+  for up to 3 GB of memory. Fine for development, not for many users.
 
 - After an outage the app can take up to about 30 seconds to reconnect once the API is back,
   because of the reconnect backoff in the spec.
@@ -211,3 +264,11 @@ Desktop
 | 2026-11-24 | Stop interrupts the run's task, and the final write uses a fresh database session | It works mid-stream and mid-tool, within about a second. |
 | 2026-11-24 | `tool_calls.user_id` added | Every per-user table is filtered by `user_id` directly. |
 | 2026-11-24 | `jsonschema` validates tool arguments | The model's arguments are checked before any tool code runs. |
+| 2026-11-25 | `services/scripts/smoke_live.py` added | A manual check against the real Anthropic API, as `docs/12` asks. Never run in CI. |
+| 2026-11-25 | The backend drives the browser through the control server, not a published CDP port | Chromium's debugging port never leaves the machine; one token-protected door instead of several ports. |
+| 2026-11-25 | The control server bridges VNC itself (no websockify) | Same reason: one port, one token. |
+| 2026-11-25 | Each computer's token is derived (HMAC of the user id), only its hash is stored | Nothing secret to keep in the database or to lose on restart. |
+| 2026-11-25 | Network lockdown inside the container with iptables, then privileges dropped | A Bot, or a page steering it, cannot reach the host, the database or cloud metadata. |
+| 2026-11-25 | `COMPUTER_PROVIDER=local` added | Tests and Docker-less servers still get file tools. |
+| 2026-11-25 | Tool risk functions receive the tool context | A click's risk depends on the label of the element the Bot last read. |
+| 2026-11-25 | A run counts as alive by `updated_at` heartbeats, and `paused` counts as active | A long Take over must not look like a dead run. |

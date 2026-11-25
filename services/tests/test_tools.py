@@ -1,19 +1,18 @@
 """Tools on their own: the SSRF guard, page reading, search, files and the registry."""
 
 import os
-import uuid
 from pathlib import Path
 
 import httpx
 import pytest
 
-from crew.config import Settings
+from crew.computer.local_provider import LocalWorkspace
+from crew.computer.provider import ComputerError
 from crew.tools import default_registry
-from crew.tools.files import LocalWorkspace
 from crew.tools.net import check_url, is_public_address, safe_get
 from crew.tools.registry import ToolContext, ToolError, ToolRegistry, wrap_untrusted
 from crew.tools.web import html_to_text
-from tests.helpers import PUBLIC_IP, public_resolver
+from tests.helpers import PUBLIC_IP, public_resolver, tool_context
 
 
 def _resolver(mapping: dict[str, list[str]]):  # type: ignore[no-untyped-def]
@@ -24,8 +23,7 @@ def _resolver(mapping: dict[str, list[str]]):  # type: ignore[no-untyped-def]
 
 
 def _ctx(http: httpx.AsyncClient, tmp_path: Path, **overrides: object) -> ToolContext:
-    settings = Settings(_env_file=None, workspaces_dir=str(tmp_path), **overrides)  # type: ignore[arg-type]
-    return ToolContext(user_id=uuid.uuid4(), run_id=uuid.uuid4(), settings=settings, http=http)
+    return tool_context(http, tmp_path, None, **overrides)
 
 
 async def _execute(
@@ -273,9 +271,9 @@ async def test_workspace_round_trip_and_listing(tmp_path: Path) -> None:
 )
 async def test_workspace_refuses_paths_outside_it(tmp_path: Path, path: str) -> None:
     workspace = LocalWorkspace(tmp_path / "user")
-    with pytest.raises(ToolError, match="outside your workspace"):
+    with pytest.raises(ComputerError, match="outside your workspace"):
         await workspace.write(path, b"x")
-    with pytest.raises(ToolError, match="outside your workspace"):
+    with pytest.raises(ComputerError, match="outside your workspace"):
         await workspace.read(path)
     assert not (tmp_path / "escape.md").exists()
 
@@ -295,7 +293,7 @@ async def test_workspace_refuses_a_symlink_that_points_outside(tmp_path: Path) -
         os.symlink(outside, root / "link.txt")
     except OSError:
         pytest.skip("symlinks are not available here")
-    with pytest.raises(ToolError, match="outside your workspace"):
+    with pytest.raises(ComputerError, match="outside your workspace"):
         await LocalWorkspace(root).read("link.txt")
 
 
@@ -329,11 +327,10 @@ def test_untrusted_wrapper_cannot_be_closed_from_inside() -> None:
 def test_every_tool_has_a_schema_and_a_safe_summary() -> None:
     registry = default_registry()
     names = {definition["name"] for definition in registry.definitions()}
-    assert names == {"web_search", "web_fetch", "files_write", "files_read", "files_list"}
+    assert {"web_search", "web_fetch", "files_write", "files_read", "files_list"} <= names
     for tool in registry.tools.values():
         assert tool.input_schema["type"] == "object"
         assert isinstance(tool.summary({}), str)
-        assert tool.risk({}) == "safe"
     assert [d["name"] for d in registry.definitions(["files_read"])] == ["files_read"]
     secret = "x" * 500
     assert len(registry.tools["web_search"].summary({"query": secret})) < 120

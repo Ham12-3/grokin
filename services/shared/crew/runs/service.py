@@ -8,7 +8,8 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from crew import events
-from crew.agent.loop import request_cancel
+from crew.agent.loop import request_cancel, request_pause, request_resume
+from crew.config import Settings
 from crew.errors import AppError
 from crew.models import Run, ToolCall
 
@@ -64,6 +65,26 @@ async def cancel_run(
             )
             return "cancelled"
         await session.refresh(run)
-    if run.status == "running":
+    if run.status in ("running", "paused"):
+        # A paused run is still alive in the worker, waiting: it can be stopped too.
         await request_cancel(redis, run.id)
+    return run.status
+
+
+async def pause_run(
+    session: AsyncSession, redis: Redis, settings: Settings, user_id: uuid.UUID, run_id: uuid.UUID
+) -> str:
+    """Asks a running run to wait (Take over). It pauses before its next step or tool."""
+    run = await get_run(session, user_id, run_id)
+    if run.status == "running":
+        await request_pause(redis, run.id, "user", settings.takeover_timeout_seconds + 60)
+    return run.status
+
+
+async def resume_run(
+    session: AsyncSession, redis: Redis, user_id: uuid.UUID, run_id: uuid.UUID
+) -> str:
+    """Lets a paused run continue (Give back)."""
+    run = await get_run(session, user_id, run_id)
+    await request_resume(redis, run.id)
     return run.status

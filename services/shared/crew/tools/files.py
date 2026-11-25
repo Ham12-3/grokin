@@ -1,16 +1,6 @@
-"""files_read, files_write and files_list.
+"""files_read, files_write and files_list, on the user's computer (`/workspace`)."""
 
-For now files live in a local folder per user (`data/workspaces/{user_id}`). Phase 4 swaps
-`LocalWorkspace` for the cloud computer behind the same `Workspace` interface.
-"""
-
-import asyncio
-import uuid
-from dataclasses import dataclass
-from pathlib import Path, PurePosixPath
-from typing import Protocol
-
-from crew.config import Settings
+from crew.computer.provider import ComputerError
 from crew.tools.registry import Args, Tool, ToolContext, ToolError, ToolOutput
 
 PATH_SCHEMA = {
@@ -21,79 +11,6 @@ PATH_SCHEMA = {
 }
 
 
-@dataclass(frozen=True)
-class FileEntry:
-    name: str
-    is_dir: bool
-    size: int
-
-
-class Workspace(Protocol):
-    async def read(self, path: str) -> bytes: ...
-    async def write(self, path: str, data: bytes) -> None: ...
-    async def list(self, path: str) -> list[FileEntry]: ...
-
-
-class LocalWorkspace:
-    """A folder on the backend machine. Every path is confined to it."""
-
-    def __init__(self, root: Path) -> None:
-        self._root = root.resolve()
-
-    def _resolve(self, path: str) -> Path:
-        cleaned = path.replace("\\", "/").strip()
-        if cleaned.startswith("/workspace"):
-            cleaned = cleaned[len("/workspace") :]
-        relative = PurePosixPath(cleaned.lstrip("/") or ".")
-        if relative.is_absolute() or ".." in relative.parts or ":" in cleaned:
-            raise ToolError("That path is outside your workspace.")
-        target = (self._root / relative).resolve()
-        # resolve() follows symlinks, so a link pointing outside is caught here too.
-        if target != self._root and self._root not in target.parents:
-            raise ToolError("That path is outside your workspace.")
-        return target
-
-    async def read(self, path: str) -> bytes:
-        target = self._resolve(path)
-        if not target.is_file():
-            raise ToolError(f"There is no file at {path}.")
-        return await asyncio.to_thread(target.read_bytes)
-
-    async def write(self, path: str, data: bytes) -> None:
-        target = self._resolve(path)
-        if target == self._root or target.is_dir():
-            raise ToolError("That path is a folder, not a file.")
-
-        def _write() -> None:
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(data)
-
-        await asyncio.to_thread(_write)
-
-    async def list(self, path: str) -> list[FileEntry]:
-        target = self._resolve(path)
-        if not target.exists():
-            if target == self._root:
-                return []
-            raise ToolError(f"There is no folder at {path}.")
-        if not target.is_dir():
-            raise ToolError(f"{path} is a file, not a folder.")
-
-        def _list() -> list[FileEntry]:
-            return [
-                FileEntry(
-                    child.name, child.is_dir(), child.stat().st_size if child.is_file() else 0
-                )
-                for child in sorted(target.iterdir(), key=lambda item: item.name.lower())
-            ]
-
-        return await asyncio.to_thread(_list)
-
-
-def workspace_for(settings: Settings, user_id: uuid.UUID) -> Workspace:
-    return LocalWorkspace(Path(settings.workspaces_dir) / str(user_id))
-
-
 def _size(count: int) -> str:
     return f"{count} bytes" if count < 1024 else f"{count / 1024:.1f} kB"
 
@@ -102,13 +19,21 @@ async def _files_write(args: Args, ctx: ToolContext) -> ToolOutput:
     data = args["content"].encode("utf-8")
     if len(data) > ctx.settings.file_max_bytes:
         raise ToolError(f"That file is too large (limit {_size(ctx.settings.file_max_bytes)}).")
-    await workspace_for(ctx.settings, ctx.user_id).write(args["path"], data)
+    try:
+        handle = await ctx.computer.handle()
+        await ctx.computer.provider.write_file(handle, args["path"], data)
+    except ComputerError as error:
+        raise ToolError(str(error)) from error
     summary = f"Wrote {args['path']} ({_size(len(data))})"
     return ToolOutput(summary, summary)
 
 
 async def _files_read(args: Args, ctx: ToolContext) -> ToolOutput:
-    data = await workspace_for(ctx.settings, ctx.user_id).read(args["path"])
+    try:
+        handle = await ctx.computer.handle()
+        data = await ctx.computer.provider.read_file(handle, args["path"])
+    except ComputerError as error:
+        raise ToolError(str(error)) from error
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as error:
@@ -119,7 +44,11 @@ async def _files_read(args: Args, ctx: ToolContext) -> ToolOutput:
 
 async def _files_list(args: Args, ctx: ToolContext) -> ToolOutput:
     path = args.get("dir", ".")
-    entries = await workspace_for(ctx.settings, ctx.user_id).list(path)
+    try:
+        handle = await ctx.computer.handle()
+        entries = await ctx.computer.provider.list_dir(handle, path)
+    except ComputerError as error:
+        raise ToolError(str(error)) from error
     if not entries:
         return ToolOutput("The folder is empty.", f"Listed {path} (empty)")
     lines = [
@@ -143,6 +72,7 @@ def make_file_tools() -> list[Tool]:
             handler=_files_write,
             summary=lambda args: f"Wrote {str(args.get('path', ''))[:120]}",
             read_only=False,
+            timeout_seconds=150.0,  # the first use may have to start the computer
         ),
         Tool(
             name="files_read",
@@ -156,6 +86,7 @@ def make_file_tools() -> list[Tool]:
             handler=_files_read,
             summary=lambda args: f"Read {str(args.get('path', ''))[:120]}",
             read_only=True,
+            timeout_seconds=150.0,
         ),
         Tool(
             name="files_list",
@@ -170,5 +101,6 @@ def make_file_tools() -> list[Tool]:
             handler=_files_list,
             summary=lambda args: f"Listed {str(args.get('dir', 'your files'))[:120]}",
             read_only=True,
+            timeout_seconds=150.0,
         ),
     ]

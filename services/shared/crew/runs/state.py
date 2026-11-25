@@ -1,7 +1,7 @@
 """Which runs count as active.
 
-A run that has been queued or running for longer than `run_timeout_seconds` is treated as
-dead (the worker crashed), so it can never block a chat forever.
+A run that has shown no sign of life for `run_timeout_seconds` is treated as dead (the
+worker crashed), so it can never block a chat forever.
 """
 
 import uuid
@@ -17,7 +17,8 @@ from crew.models.chat import ACTIVE_RUN_STATUSES
 
 def is_active(settings: Settings) -> ColumnElement[bool]:
     cutoff = datetime.now(UTC) - timedelta(seconds=settings.run_timeout_seconds)
-    return Run.status.in_(ACTIVE_RUN_STATUSES) & (Run.created_at > cutoff)
+    # `updated_at` moves whenever the worker makes progress (or sends a heartbeat).
+    return Run.status.in_(ACTIVE_RUN_STATUSES) & (Run.updated_at > cutoff)
 
 
 async def active_bot_ids(
