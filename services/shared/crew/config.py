@@ -115,6 +115,9 @@ class Settings(BaseSettings):
     vault_master_key: str = Field(default="", repr=False)
     vault_kms_key_id: str = ""
 
+    # The oldest desktop app this API still works with. Older apps show "Please update".
+    min_desktop_version: str = "0.1.0"
+
     # Observability
     sentry_dsn: str = Field(default="", repr=False)
     log_level: str = "INFO"

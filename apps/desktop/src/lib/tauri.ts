@@ -101,3 +101,22 @@ export function onPauseAllRoutines(callback: () => void): Promise<UnlistenFn> {
 export function saveFile(url: string, filename: string): Promise<boolean> {
   return invoke("save_file", { url, filename });
 }
+
+/** The version of a downloaded update waiting for a restart, or null. */
+export function updateStatus(): Promise<string | null> {
+  return invoke("update_status");
+}
+
+/** Installs the downloaded update and restarts the app. */
+export function updateRestart(): Promise<boolean> {
+  return invoke("update_restart");
+}
+
+export function onUpdateReady(callback: (version: string) => void): Promise<UnlistenFn> {
+  return listen<string>("update:ready", (event) => callback(event.payload));
+}
+
+/** The tray's "Update ready, restart" was clicked. */
+export function onUpdateRestartRequested(callback: () => void): Promise<UnlistenFn> {
+  return listen("update:restart-requested", () => callback());
+}

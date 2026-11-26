@@ -9,6 +9,7 @@ from arq import cron
 from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
+from crew import observability
 from crew.agent.loop import run_agent as run_agent_impl
 from crew.chats import groups
 from crew.computer import create_provider
@@ -38,6 +39,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["registry"] = default_registry()
     ctx["provider"] = create_provider(settings)
     configure_logging(settings.log_level)
+    observability.configure(settings, "worker")
     ctx["storage"] = create_storage(settings)
     ctx["connectors"] = create_backend(settings, ctx["session_factory"], ctx["http"])
     try:
@@ -102,6 +104,8 @@ async def compact_memory(ctx: dict[str, Any], bot_id: str) -> str:
 
 async def stop_idle(ctx: dict[str, Any]) -> int:
     """Every minute: pause computers nobody has used for COMPUTER_IDLE_MINUTES."""
+    # Also the worker's sign of life, for health checks (see docs/DEPLOY.md).
+    await ctx["pubsub_redis"].set("worker:heartbeat", "1", ex=180)
     return await stop_idle_computers(
         ctx["session_factory"], ctx["pubsub_redis"], ctx["provider"], ctx["settings"]
     )

@@ -22,9 +22,13 @@ import {
   authLogout,
   errorMessage,
   onOpenApprovals,
+  appVersion,
   onPauseAllRoutines,
+  onUpdateRestartRequested,
   setTrayBadge,
+  updateRestart,
 } from "@/lib/tauri";
+import { isOlder } from "@/lib/version";
 
 /** The signed-in app: sidebar, chat and the details pane. */
 export function Shell() {
@@ -34,6 +38,11 @@ export function Shell() {
     queryKey: ["me"],
     queryFn: () => apiFetch<Schemas["MeResponse"]>("/me"),
   });
+  const version = useQuery({ queryKey: ["app-version"], queryFn: appVersion, staleTime: Infinity });
+  // The server says which app versions it still works with.
+  const outdated =
+    Boolean(version.data && me.data?.min_desktop_version) &&
+    isOlder(version.data ?? "", me.data?.min_desktop_version ?? "");
   const status = useLiveStore((state) => state.status);
   const liveWorking = useLiveStore((state) => state.working);
   const liveRuns = useLiveStore((state) => state.runs);
@@ -65,6 +74,25 @@ export function Shell() {
   useEffect(() => {
     void setTrayBadge(pendingCount).catch(() => undefined);
   }, [pendingCount]);
+
+  // The tray's "Update ready, restart": never while a Bot is in the middle of a reply.
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    void onUpdateRestartRequested(() => {
+      if (Object.keys(useLiveStore.getState().runs).length === 0) void updateRestart();
+      else setScreen("settings"); // it explains why, and offers the button when done
+    })
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, []);
 
   // The tray menu's "Pause all routines".
   useEffect(() => {
@@ -154,6 +182,14 @@ export function Shell() {
       {status === "reconnecting" && (
         <div role="status" className="bg-amber-500/15 px-4 py-1 text-center text-xs">
           Reconnecting...
+        </div>
+      )}
+      {outdated && (
+        <div role="alert" className="bg-destructive/15 px-4 py-1 text-center text-xs">
+          Please update Crew. This version is too old to work with the server.{" "}
+          <button type="button" className="underline" onClick={() => setScreen("settings")}>
+            Open Updates
+          </button>
         </div>
       )}
       <div className="flex min-h-0 flex-1">

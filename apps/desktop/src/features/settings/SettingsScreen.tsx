@@ -1,7 +1,8 @@
 import { ConnectorsSection } from "./ConnectorsSection";
+import { UpdatesSection } from "./UpdatesSection";
 import { VaultSection } from "./VaultSection";
 
-/** App-wide settings: the Vault and connected apps. */
+/** App-wide settings: connected apps, the Vault and updates. */
 export function SettingsScreen() {
   return (
     <section aria-label="Settings" className="min-w-0 flex-1 overflow-y-auto">
@@ -11,6 +12,7 @@ export function SettingsScreen() {
       <div className="mx-auto max-w-2xl space-y-8 p-4">
         <ConnectorsSection />
         <VaultSection />
+        <UpdatesSection />
       </div>
     </section>
   );

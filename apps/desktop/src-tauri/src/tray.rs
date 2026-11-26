@@ -10,6 +10,7 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 const OPEN: &str = "open";
 const APPROVALS: &str = "approvals";
 const PAUSE_ROUTINES: &str = "pause_routines";
+const UPDATE: &str = "update";
 const QUIT: &str = "quit";
 const TRAY_ID: &str = "main";
 /// Tells the window to show the Approvals screen.
@@ -21,9 +22,22 @@ pub const PAUSE_ROUTINES_EVENT: &str = "routines:pause-all";
 /// Kept in app state so the count can change after the menu is built.
 pub struct TrayState {
     approvals: MenuItem<Wry>,
+    update: MenuItem<Wry>,
     /// Set when a notification was shown: the next time the window comes to the front it
     /// opens the Approvals screen.
     open_approvals_on_focus: AtomicBool,
+}
+
+pub fn update_label(version: &str) -> String {
+    format!("Update ready ({version}), restart")
+}
+
+/// Shows "Update ready, restart" in the tray menu.
+pub fn set_update_ready(app: &AppHandle, version: &str) {
+    if let Some(state) = app.try_state::<TrayState>() {
+        let _ = state.update.set_text(update_label(version));
+        let _ = state.update.set_enabled(true);
+    }
 }
 
 pub fn approvals_label(count: u32) -> String {
@@ -98,10 +112,13 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         true,
         None::<&str>,
     )?;
+    // Greyed out until an update has been downloaded.
+    let update = MenuItem::with_id(app, UPDATE, "Crew is up to date", false, None::<&str>)?;
     let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &approvals, &pause, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &approvals, &pause, &update, &quit])?;
     app.manage(TrayState {
         approvals,
+        update,
         open_approvals_on_focus: AtomicBool::new(false),
     });
 
@@ -112,6 +129,11 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             OPEN => show_main_window(app),
             APPROVALS => open_approvals(app),
+            UPDATE => {
+                // The window restarts only when no Bot is in the middle of a reply.
+                show_main_window(app);
+                let _ = app.emit(crate::updater::RESTART_REQUESTED_EVENT, ());
+            }
             PAUSE_ROUTINES => {
                 let _ = app.emit(PAUSE_ROUTINES_EVENT, ());
             }
@@ -146,6 +168,7 @@ mod tests {
         assert_eq!(tooltip(0), "Crew");
         assert_eq!(tooltip(1), "Crew: 1 approval waiting");
         assert_eq!(tooltip(4), "Crew: 4 approvals waiting");
+        assert_eq!(update_label("0.1.1"), "Update ready (0.1.1), restart");
     }
 
     #[test]

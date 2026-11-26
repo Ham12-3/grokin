@@ -21,6 +21,11 @@ vi.mock("@/lib/tauri", async (importOriginal) => ({
   onOpenApprovals: vi.fn(),
   onPauseAllRoutines: vi.fn(),
   saveFile: vi.fn(),
+  appVersion: vi.fn(),
+  updateStatus: vi.fn(),
+  updateRestart: vi.fn(),
+  onUpdateReady: vi.fn(),
+  onUpdateRestartRequested: vi.fn(),
 }));
 
 // No real WebSocket in unit tests; ws.test.ts and live.test.ts cover that layer.
@@ -56,6 +61,9 @@ let emitAuthChanged: (signedIn: boolean) => void = () => {};
 let emitAuthError: (error: tauri.TauriError) => void = () => {};
 let emitOpenApprovals: () => void = () => {};
 let emitPauseAll: () => void = () => {};
+let emitUpdateReady: (version: string) => void = () => {};
+let emitRestartRequested: () => void = () => {};
+let minDesktopVersion = "0.1.0";
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -243,7 +251,12 @@ function fakeApi(initial: {
     calls.push({ method, path, body, auth: new Headers(init?.headers).get("Authorization") });
 
     if (path === "/me") {
-      return json({ email: "sam@example.com", name: "Sam", daily_token_budget: 1 });
+      return json({
+        email: "sam@example.com",
+        name: "Sam",
+        daily_token_budget: 1,
+        min_desktop_version: minDesktopVersion,
+      });
     }
     if (path === "/bots" && method === "GET") return json(bots);
     if (String(input).startsWith("http://api.test/files/")) {
@@ -513,6 +526,18 @@ beforeEach(() => {
   });
   mocked.onPauseAllRoutines.mockImplementation(async (callback) => {
     emitPauseAll = callback;
+    return () => {};
+  });
+  minDesktopVersion = "0.1.0";
+  mocked.appVersion.mockResolvedValue("0.1.0");
+  mocked.updateStatus.mockResolvedValue(null);
+  mocked.updateRestart.mockResolvedValue(true);
+  mocked.onUpdateReady.mockImplementation(async (callback) => {
+    emitUpdateReady = callback;
+    return () => {};
+  });
+  mocked.onUpdateRestartRequested.mockImplementation(async (callback) => {
+    emitRestartRequested = callback;
     return () => {};
   });
 });
@@ -1501,4 +1526,59 @@ test("a file card in the chat opens that item in the Library", async () => {
   expect(
     await within(preview).findByRole("heading", { name: "Q3 report", level: 1 }),
   ).toBeInTheDocument();
+});
+
+// --- Updates ----------------------------------------------------------------------------
+
+test("a downloaded update can be installed from Settings", async () => {
+  fakeApi({ bots: [BOT] });
+  const settings = await openSettings();
+  const updates = within(settings).getByRole("region", { name: "Updates" });
+  expect(await within(updates).findByText("You are up to date.")).toBeInTheDocument();
+
+  act(() => emitUpdateReady("0.1.1"));
+
+  expect(await within(updates).findByRole("status")).toHaveTextContent("version 0.1.1");
+  fireEvent.click(within(updates).getByRole("button", { name: "Restart to update" }));
+  expect(mocked.updateRestart).toHaveBeenCalledTimes(1);
+});
+
+test("the app never restarts for an update while a Bot is replying", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  mocked.updateStatus.mockResolvedValue("0.1.1");
+  fakeApi({ bots: [{ ...BOT, working: true }], activeRunId: "run-9" });
+  render(<App />);
+  await screen.findByRole("log");
+  await waitFor(() => expect(useLiveStore.getState().runs["chat-1"]).toBe("run-9"));
+  await waitFor(() => expect(mocked.onUpdateRestartRequested).toHaveBeenCalled());
+
+  act(() => emitRestartRequested()); // the tray's "Update ready, restart"
+
+  expect(mocked.updateRestart).not.toHaveBeenCalled();
+  const updates = await screen.findByRole("region", { name: "Updates" });
+  expect(within(updates).getByRole("button", { name: "Restart to update" })).toBeDisabled();
+  expect(within(updates).getByText(/A Bot is working/)).toBeInTheDocument();
+
+  // The reply ends: now the same request restarts.
+  act(() => useLiveStore.setState({ runs: {} }));
+  act(() => emitRestartRequested());
+  expect(mocked.updateRestart).toHaveBeenCalledTimes(1);
+});
+
+test("an app older than the server allows is asked to update", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({ bots: [BOT] });
+  minDesktopVersion = "0.2.0";
+  render(<App />);
+  await screen.findByRole("log");
+  expect(await screen.findByText(/Please update Crew/)).toBeInTheDocument();
+});
+
+test("an up-to-date app sees no update notice", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  fakeApi({ bots: [BOT] });
+  render(<App />);
+  await screen.findByRole("log");
+  await waitFor(() => expect(mocked.appVersion).toHaveBeenCalled());
+  expect(screen.queryByText(/Please update Crew/)).not.toBeInTheDocument();
 });

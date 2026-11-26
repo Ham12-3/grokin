@@ -29,3 +29,7 @@ Thumbs.db
 
 # Local Bot workspaces (dev)
 data/
+
+# Written by the release workflow
+apps/desktop/src-tauri/tauri.windows-signing.conf.json
+apps/desktop/src-tauri/tauri.api.conf.json

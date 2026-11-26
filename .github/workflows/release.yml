@@ -1,0 +1,161 @@
+name: Release
+
+# Push a tag like v0.1.0 to build installers for Windows, macOS and Linux and publish them
+# (with latest.json for the in-app updater) as a draft GitHub Release.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Installers (${{ matrix.name }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            args: ""
+          - name: macOS universal
+            os: macos-latest
+            args: "--target universal-apple-darwin"
+          - name: Linux
+            os: ubuntu-22.04
+            args: ""
+    runs-on: ${{ matrix.os }}
+    env:
+      # Each is empty when the secret is not set. Nothing below fails because of that:
+      # the build is then unsigned, or has no updater files.
+      UPDATER_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      APPLE_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+      WINDOWS_CERT: ${{ secrets.WINDOWS_CERTIFICATE }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The tag must match the app version
+        shell: bash
+        run: |
+          version=$(node -p "require('./apps/desktop/src-tauri/tauri.conf.json').version")
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "Tag $GITHUB_REF_NAME does not match tauri.conf.json version $version" >&2
+            exit 1
+          fi
+
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev libdbus-1-dev
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: apps/desktop/src-tauri
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: apps/desktop/pnpm-lock.yaml
+      - name: Install frontend dependencies
+        working-directory: apps/desktop
+        run: pnpm install --frozen-lockfile
+
+      # --- Updater files: only when the updater key is set -----------------------------
+      - name: Enable updater files
+        if: env.UPDATER_KEY != ''
+        shell: bash
+        run: |
+          echo "TAURI_SIGNING_PRIVATE_KEY<<CREW_EOF" >> "$GITHUB_ENV"
+          echo "$UPDATER_KEY" >> "$GITHUB_ENV"
+          echo "CREW_EOF" >> "$GITHUB_ENV"
+          echo "TAURI_SIGNING_PRIVATE_KEY_PASSWORD=${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}" >> "$GITHUB_ENV"
+          echo "EXTRA_CONFIG=--config src-tauri/tauri.release.conf.json" >> "$GITHUB_ENV"
+      - name: No updater key
+        if: env.UPDATER_KEY == ''
+        shell: bash
+        run: echo "::warning::TAURI_SIGNING_PRIVATE_KEY is not set. Installers are built without updater files, so installed apps cannot update themselves."
+
+      # --- macOS signing and notarization: only when the certificate is set ------------
+      - name: Enable macOS signing
+        if: runner.os == 'macOS' && env.APPLE_CERT != ''
+        shell: bash
+        run: |
+          {
+            echo "APPLE_CERTIFICATE=$APPLE_CERT"
+            echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+            echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+            echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+            echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+            echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+          } >> "$GITHUB_ENV"
+      - name: No macOS certificate
+        if: runner.os == 'macOS' && env.APPLE_CERT == ''
+        run: echo "::warning::APPLE_CERTIFICATE is not set. The macOS app is unsigned and not notarized."
+
+      # --- Windows signing: only when the certificate is set ---------------------------
+      # WINDOWS_CERTIFICATE is the .pfx file, base64 encoded.
+      - name: Enable Windows signing
+        if: runner.os == 'Windows' && env.WINDOWS_CERT != ''
+        shell: pwsh
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "crew.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERT))
+          $password = ConvertTo-SecureString "${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}" -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          $config = @{ bundle = @{ windows = @{
+            certificateThumbprint = $cert.Thumbprint
+            digestAlgorithm = "sha256"
+            timestampUrl = "http://timestamp.digicert.com"
+          } } } | ConvertTo-Json -Depth 5
+          Set-Content -Path apps/desktop/src-tauri/tauri.windows-signing.conf.json -Value $config
+          "EXTRA_CONFIG=$env:EXTRA_CONFIG --config src-tauri/tauri.windows-signing.conf.json" >> $env:GITHUB_ENV
+      - name: No Windows certificate
+        if: runner.os == 'Windows' && env.WINDOWS_CERT == ''
+        run: echo "::warning::WINDOWS_CERTIFICATE is not set. The Windows installer is unsigned (SmartScreen will warn)."
+
+      # The app may only talk to its own API: allow exactly that address.
+      - name: Allow the API address
+        if: vars.CREW_API_URL != ''
+        shell: bash
+        env:
+          CREW_API_URL: ${{ vars.CREW_API_URL }}
+        run: |
+          node -e '
+            const api = process.env.CREW_API_URL.replace(/\/+$/, "");
+            const ws = api.replace(/^http/, "ws");
+            const csp = { "connect-src": `\x27self\x27 ipc: http://ipc.localhost ${api} ${ws}` };
+            require("fs").writeFileSync(
+              "apps/desktop/src-tauri/tauri.api.conf.json",
+              JSON.stringify({ app: { security: { csp } } }, null, 2),
+            );
+          '
+          echo "EXTRA_CONFIG=$EXTRA_CONFIG --config src-tauri/tauri.api.conf.json" >> "$GITHUB_ENV"
+      - name: No API address
+        if: vars.CREW_API_URL == ''
+        shell: bash
+        run: echo "::warning::The repository variable CREW_API_URL is not set. The app will look for the API on localhost."
+
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Where the installed app finds the API, and (optionally) error reporting.
+          CREW_API_URL: ${{ vars.CREW_API_URL }}
+          VITE_SENTRY_DSN: ${{ vars.VITE_SENTRY_DSN }}
+        with:
+          projectPath: apps/desktop
+          tagName: ${{ github.ref_name }}
+          releaseName: Crew ${{ github.ref_name }}
+          releaseBody: See the assets below to download and install this version.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }} ${{ env.EXTRA_CONFIG }}

@@ -28,7 +28,7 @@ from api.routers import (
     vault,
     webhooks,
 )
-from crew import __version__
+from crew import __version__, observability
 from crew.auth.mailer import create_mailer
 from crew.auth.tokens import require_jwt_secret
 from crew.computer import create_provider
@@ -108,6 +108,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Only to check edited approval arguments against tool schemas; the API runs no tools.
     app.state.registry = default_registry()
     configure_logging(settings.log_level)
+    observability.configure(settings, "api")
     try:
         app.state.vault = create_wrapper(settings)
     except VaultError:

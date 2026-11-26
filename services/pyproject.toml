@@ -23,6 +23,7 @@ dependencies = [
     "croniter>=7.0.0",
     "tzdata>=2026.6",
     "mcp>=2.3.0",
+    "sentry-sdk>=2",
 ]
 
 [project.optional-dependencies]

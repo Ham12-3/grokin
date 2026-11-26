@@ -257,9 +257,6 @@ async def test_a_run_uses_a_secret_that_never_reaches_the_model_the_database_or_
     assert approval["preview"]["fields"] == {"token": "{{vault:github_token}}"}
     await ctx.client.post(f"{API}/approvals/{approval['id']}/approve", headers=me)
 
-    structlog.get_logger("test").info(
-        "tool.debug", detail=f"before the run {SECRET}"
-    )  # not active yet
     assert await run_worker(ctx, sent["run_id"], llm, registry=registry) == "completed"
 
     # The tool got the real value...
@@ -286,10 +283,7 @@ async def test_a_run_uses_a_secret_that_never_reaches_the_model_the_database_or_
             assert SECRET not in "".join(dump), query
     # and not the logs.
     logs = capsys.readouterr()
-    assert "run.finished" in logs.out
-    assert (
-        logs.out.count(SECRET) == 1 and "before the run" in logs.out
-    )  # only our own line, made before
+    assert "run.finished" in logs.out and SECRET not in logs.out + logs.err
     logging.getLogger().handlers.clear()
 
 

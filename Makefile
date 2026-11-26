@@ -1,7 +1,7 @@
 # Crew dev commands. Run from the repo root.
 COMPOSE := docker compose -f infra/docker-compose.yml
 
-.PHONY: up down migrate api worker desktop computer-image check check-services check-desktop check-rust check-slow
+.PHONY: up down migrate api worker desktop computer-image check check-services check-desktop check-rust check-slow check-secrets
 
 up: ## Start Postgres and Redis
 	$(COMPOSE) up -d --wait
@@ -28,6 +28,9 @@ check: check-services check-desktop check-rust ## Run every linter and test
 
 check-slow: ## Tests against a real Docker computer (needs the image and internet)
 	cd services && CREW_RUN_SLOW=1 uv run pytest -q tests/test_computer_docker.py
+
+check-secrets: ## Release checklist: no secret value in the whole test suite's output
+	bash services/scripts/check_no_secrets_in_logs.sh
 
 check-services:
 	cd services && uv run ruff check . && uv run ruff format --check . && uv run mypy . && uv run pytest -q

@@ -4,9 +4,10 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 9 (group chats and Library): built and verified on Linux. Phases 4 to 9 still wait
-for your hands-on check in the desktop app on Windows. Phase 10 (installers and release) is
-next.
+All ten phases are built. Phase 10 (release) is ready as far as it can be without your
+keys: the first real release needs your updater key, signing certificates and a deployed
+backend (`docs/RELEASE.md`). Phases 4 to 10 still wait for your hands-on check in the
+desktop app on Windows.
 
 ## Done
 
@@ -427,11 +428,54 @@ Verified on 2026-11-26 (Linux)
   its checks are unit-tested), PDF preview inside the Tauri window, S3 storage, and real
   Claude deciding who to mention.
 
+### Phase 10: release
+
+- Updater (`tauri-plugin-updater`): checks at start and every 6 hours, downloads quietly,
+  shows "Update ready, restart" in the tray and in Settings > Updates, and installs only on
+  restart. The app does not restart while a Bot is replying.
+- `tauri.conf.json`: updater endpoint and a placeholder for your public key; bundle
+  identifier `com.crew.desktop`; new icons generated from `apps/desktop/app-icon.png`.
+- `.github/workflows/release.yml`: on `v*` tags, builds Windows, macOS (universal) and
+  Ubuntu installers with `tauri-apps/tauri-action` and uploads them with `latest.json` to a
+  draft GitHub Release. macOS signing and notarization, Windows signing and the updater
+  files are each skipped with a warning when their secret is missing. The API address
+  (`CREW_API_URL` variable) is compiled in and added to the app's content security policy.
+- Error reporting (Sentry) for the API, the worker and the React app, off unless a DSN is
+  set. Request bodies, headers, messages, local variables and breadcrumbs are removed.
+- `/me` returns `min_desktop_version`; an older app shows "Please update Crew".
+- `services/Dockerfile` (one image for API and worker, non-root) and `docs/DEPLOY.md`.
+  The worker writes a `worker:heartbeat` key every minute.
+- Security checklist: every item is now a test or a `make` target (`docs/RELEASE.md`).
+
+Verified on 2026-11-26 (Linux)
+
+- 300 backend tests, 92 desktop tests and 17 Rust tests pass. `make check-secrets` found no
+  secret value in the whole suite's output. Another user (and no sign-in) is refused on all
+  42 routes that name something by id.
+- The backend image was built and started in production mode: migrations ran and the
+  health check answered.
+- Not verified: the release workflow has never run (no tag pushed, no secrets), so
+  installers, signing, notarization and a real self-update are untested. The updater code
+  compiles but has never downloaded an update. Sentry has never received an event.
+
 ## Next
 
-- Phase 10: installers + release (`prompts/phase-10-release.md`).
+Nothing is left to build from the prompt pack. What remains is yours to do or decide:
+
+- Check phases 4 to 10 in the desktop app on Windows (manual steps under each phase).
+- Generate the updater key and add the secrets (`docs/RELEASE.md`), then tag `v0.1.0`.
+- Deploy the backend (`docs/DEPLOY.md`).
+- Try the parts that need real accounts: Claude in the app, Composio, Google sign-in,
+  SMTP, web search.
 
 ## Shortcuts taken (to revisit)
+
+- The updater's public key in `tauri.conf.json` is a placeholder until you generate your
+  key. Until then the app logs "updates are not set up" and carries on.
+- A release without `CREW_API_URL` set builds an app that looks for the API on localhost.
+- The app's Settings screen still lacks account, devices, usage, notifications, theme and
+  start-at-login from `docs/10`.
+- Version numbers are kept in step by hand in four files.
 
 - Group chats have no details pane, no `/` skills and no attachments.
 - While a group's Bots take turns the chat is busy; you can press Stop.

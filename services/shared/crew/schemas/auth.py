@@ -56,3 +56,5 @@ class MeResponse(UserOut):
     daily_token_budget: int
     input_tokens_today: int
     output_tokens_today: int
+    # The oldest desktop app this server still works with.
+    min_desktop_version: str = "0.1.0"

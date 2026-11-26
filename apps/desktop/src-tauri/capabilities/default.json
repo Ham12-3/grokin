@@ -21,6 +21,8 @@
     "allow-app-version",
     "allow-notify",
     "allow-set-tray-badge",
-    "allow-save-file"
+    "allow-save-file",
+    "allow-update-status",
+    "allow-update-restart"
   ]
 }

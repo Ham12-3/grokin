@@ -1380,6 +1380,11 @@ export interface components {
             input_tokens_today: number;
             /** Output Tokens Today */
             output_tokens_today: number;
+            /**
+             * Min Desktop Version
+             * @default 0.1.0
+             */
+            min_desktop_version: string;
         };
         /** MemoryOut */
         MemoryOut: {

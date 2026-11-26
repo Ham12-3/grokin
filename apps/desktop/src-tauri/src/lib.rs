@@ -6,6 +6,7 @@ mod auth;
 mod library;
 mod secrets;
 mod tray;
+mod updater;
 
 use tauri::{Manager, WindowEvent};
 use tauri_plugin_deep_link::DeepLinkExt;
@@ -77,6 +78,8 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .manage(updater::UpdateState::default())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             // Do not restore "hidden": the app hides to the tray on close.
@@ -115,6 +118,7 @@ pub fn run() {
             });
 
             tray::create(app.handle())?;
+            updater::start(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -138,6 +142,8 @@ pub fn run() {
             notify,
             set_tray_badge,
             library::save_file,
+            updater::update_status,
+            updater::update_restart,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Crew");
@@ -146,7 +152,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     /// Commands declared in build.rs. Each needs an `allow-...` line in the capability.
-    const COMMANDS: [&str; 9] = [
+    const COMMANDS: [&str; 11] = [
         "auth_start_login",
         "auth_get_tokens",
         "auth_get_access_token",
@@ -156,6 +162,8 @@ mod tests {
         "notify",
         "set_tray_badge",
         "save_file",
+        "update_status",
+        "update_restart",
     ];
 
     fn permissions() -> Vec<String> {

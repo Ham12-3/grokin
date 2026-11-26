@@ -107,3 +107,39 @@ async def test_the_desktop_app_may_use_every_method_the_api_has(
     )
     assert resp.status_code == 200, method
     assert method in resp.headers["access-control-allow-methods"]
+
+
+def test_error_reports_carry_no_user_content() -> None:
+    from crew.observability import configure, scrub
+
+    event = {
+        "message": "failed for sam@example.com",
+        "user": {"email": "sam@example.com"},
+        "extra": {"prompt": "my secret plan"},
+        "breadcrumbs": [{"message": "POST body"}],
+        "request": {
+            "method": "POST",
+            "url": "https://api.example/api/v1/chats/1/messages?token=abc",
+            "data": {"content": "my secret plan"},
+            "headers": {"Authorization": "Bearer abc"},
+            "cookies": "session=abc",
+        },
+        "exception": {
+            "values": [
+                {
+                    "type": "ValueError",
+                    "value": "bad value: my secret plan",
+                    "stacktrace": {
+                        "frames": [{"function": "send", "vars": {"content": "my secret plan"}}]
+                    },
+                }
+            ]
+        },
+    }
+    cleaned = str(scrub(event))
+    for leaked in ("secret plan", "sam@example.com", "Bearer", "token=abc", "session="):
+        assert leaked not in cleaned
+    assert "ValueError" in cleaned and "'function': 'send'" in cleaned
+    assert "/api/v1/chats/1/messages" in cleaned
+    # Without a DSN nothing is started at all.
+    assert configure(Settings(_env_file=None), "api") is False
