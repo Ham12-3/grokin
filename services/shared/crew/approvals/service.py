@@ -14,8 +14,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crew import audit, events
 from crew.errors import AppError
-from crew.models import Approval, Run
+from crew.models import Approval, Bot, Run
 from crew.schemas.approval import ApprovalOut, ApprovalPreview
+from crew.tools.connectors import registry_for_bot
 from crew.tools.registry import ToolRegistry, validation_message
 
 
@@ -74,6 +75,10 @@ async def _resolve(
         raise AppError(409, "approval_resolved", "This was already answered.")
 
     if edited_args is not None:
+        bot = await session.get(Bot, approval.bot_id)
+        if registry is not None and bot is not None:
+            # App and MCP tools exist only for the Bots allowed to use them.
+            registry = await registry_for_bot(session, registry, bot)
         tool = registry.get(approval.tool) if registry is not None else None
         problem = "This tool no longer exists." if tool is None else None
         if tool is not None:

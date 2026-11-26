@@ -60,7 +60,12 @@ from alembic.config import Config  # noqa: E402
 from api.main import create_app  # noqa: E402
 from crew.computer.local_provider import LocalProvider  # noqa: E402
 from crew.config import Settings, get_settings  # noqa: E402
+from crew.connectors.backend import FakeBackend  # noqa: E402
+from crew.connectors.mcp_client import open_http  # noqa: E402
 from crew.tools import default_registry  # noqa: E402
+from crew.vault.crypto import MasterKeyWrapper  # noqa: E402
+
+TEST_VAULT_KEY = "dGVzdC1vbmx5LXZhdWx0LW1hc3Rlci1rZXktMzJiISE="  # test only, 32 bytes
 
 SERVICES_DIR = Path(__file__).resolve().parents[1]
 
@@ -169,6 +174,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     if not services_ready:
         pytest.skip("Postgres or Redis not reachable (run `make up`)")
     settings = get_settings()
+    settings.mcp_allow_private = False  # a test may switch it on; never carry it over
     engine = create_async_engine(settings.database_url, poolclass=NullPool)
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
     await redis.flushdb()
@@ -177,7 +183,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
             text(
                 "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
                 "messages, runs, tool_calls, usage_daily, computers, approvals, connector_log, memories, "
-                "skills, routines "
+                "skills, routines, vault_items, connectors "
                 "CASCADE"
             )
         )
@@ -195,6 +201,9 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     app.state.queue = queue
     app.state.provider = LocalProvider(settings)
     app.state.registry = default_registry()
+    app.state.vault = MasterKeyWrapper(TEST_VAULT_KEY)
+    app.state.connectors = FakeBackend(session_factory)
+    app.state.mcp_opener = open_http
     app.state.redis = redis
     app.state.http = http
     app.state.mailer = mailer

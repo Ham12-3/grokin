@@ -1,7 +1,6 @@
 """Tool registry and tool implementations."""
 
 from crew.tools.browser import make_browser_tools, make_takeover_tool
-from crew.tools.connectors_fake import make_fake_connector_tools
 from crew.tools.files import make_file_tools
 from crew.tools.handoff import make_handoff_tool
 from crew.tools.memory import make_memory_tools
@@ -13,7 +12,7 @@ from crew.tools.web import make_web_fetch, make_web_search
 
 
 def default_registry(resolver: Resolver = system_resolver) -> ToolRegistry:
-    """The tools every Bot has."""
+    """The tools every Bot has. App tools are added per Bot: `connectors.registry_for_bot`."""
     registry = ToolRegistry()
     registry.register(make_web_search())
     registry.register(make_web_fetch(resolver))
@@ -27,8 +26,6 @@ def default_registry(resolver: Resolver = system_resolver) -> ToolRegistry:
         registry.register(tool)
     registry.register(make_skill_tool())
     registry.register(make_handoff_tool())
-    for tool in make_fake_connector_tools():
-        registry.register(tool)
     return registry
 
 

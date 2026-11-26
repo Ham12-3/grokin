@@ -4,8 +4,9 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 7 (routines): built and verified on Linux. Phases 4 to 7 still wait for your hands-on
-check in the desktop app on Windows. Phase 8 (connectors and Vault) is next.
+Phase 8 (connectors and Vault): built and verified on Linux with a stand-in app service.
+The real Composio service has not been tried (no key). Phases 4 to 8 still wait for your
+hands-on check in the desktop app on Windows. Phase 9 (group chats and Library) is next.
 
 ## Done
 
@@ -325,11 +326,76 @@ Verified on 2026-11-26 (Linux)
 - Not verified here: the tray item and the notification on Windows, and a routine left to
   reach its time by itself overnight (I moved `next_run_at` instead of waiting).
 
+### Phase 8: connectors and Vault
+
+Vault
+
+- Migration `0009`: `vault_items`, `connectors`, `bots.apps`.
+- `crew/vault/crypto.py`: AES-256-GCM with a random key per item. That key is wrapped by
+  AWS KMS when `VAULT_KMS_KEY_ID` is set (needs the `aws` extra), else by
+  `VAULT_MASTER_KEY`. The user id and item name are bound in, so a row copied to another
+  user does not decrypt.
+- API: list (names and types), add, delete. No route returns a value.
+- `crew/vault/inject.py`: `{{vault:name}}` is swapped in inside the execution gate, just
+  before the tool runs. Results and summaries are scrubbed, and a log processor scrubs
+  every log line while a run has a secret in use.
+- A tool call that uses a Vault item always asks first, whatever the tool or approval
+  mode, and the card names the item. Each use is written to `audit_log`.
+
+Connectors
+
+- App service behind one interface: `ComposioBackend` (REST v3.1) for Gmail, Google
+  Calendar, Slack and Notion, and a stand-in for development that connects at once,
+  returns sample data and records sends in `connector_log`.
+- Tools: `email_search`, `email_read`, `email_send`, `calendar_list`, `calendar_create`,
+  `slack_read`, `slack_post`, `notion_search`, `notion_update`. The four that change
+  something always ask. They replace the phase 5 test tools.
+- Custom MCP servers: add by address (https and public only, unless `MCP_ALLOW_PRIVATE`),
+  headers from a Vault item, tools listed with the `mcp` client. Every MCP tool asks unless
+  you mark it safe.
+- Per-Bot access: a Bot gets an app's tools only if the app is ticked in its Apps tab.
+  Disconnecting an app removes it from every Bot.
+- Routines can start on a new email (`connector_event`), polled once a minute.
+- The prompt lists the Bot's apps and the order to prefer: app tool, then API or CLI, then
+  the browser.
+- The API now allows PUT from the app's origin (the browser refused to save a Bot's apps).
+
+Desktop
+
+- Settings screen (gear in the sidebar): Connectors (connect, disconnect, add an MCP server,
+  mark its tools safe) and Vault (add with a masked field, delete; values never shown).
+- Apps tab on each Bot with a checkbox per connected app.
+
+Verified on 2026-11-26 (Linux)
+
+- Backend: 281 tests pass. A run with a secret: the tool got the real value, and the value
+  was absent from the model's input, the API, five database tables and the logs. The same
+  on a real container with `terminal_run`. A real MCP server over HTTP was added, enabled
+  for one Bot and called. Composio's request shapes are checked against a stub.
+- Real API and worker with the real frontend in a browser: connected Gmail (stand-in),
+  added a Vault item (value not on the page afterwards), ticked Gmail for a Bot, got the
+  unread emails summarised, and an email request showed an approval card.
+- Not verified: Composio itself (connecting a real Gmail account, real sends), AWS KMS, and
+  the packaged app on Windows.
+
 ## Next
 
-- Phase 8: connectors + Vault (`prompts/phase-08-connectors-vault.md`).
+- Phase 9: group chats + Library (`prompts/phase-09-groups-library.md`).
 
 ## Shortcuts taken (to revisit)
+
+- Composio is written from its published API and never run against a real account. The
+  Notion update and the new-email polling are the least certain parts.
+- Slack "new message" routines are stored but never fire: they need a channel and Slack's
+  own event setup.
+- New-email routines are polled once a minute rather than using Composio's triggers, which
+  need a public webhook address.
+- A Vault value used in `terminal_run` is visible to other processes on that user's own
+  computer while the command runs.
+- An MCP address is checked when it is added, not pinned: a server whose DNS later points
+  somewhere private is not caught.
+- The Settings screen has only Connectors and Vault. Account, devices, usage, theme and
+  the rest of `docs/10` come with the release phase.
 
 - A webhook's request body is ignored: it is never shown to the Bot. Passing it on safely
   (as untrusted data) can come later.
@@ -479,3 +545,7 @@ Verified on 2026-11-26 (Linux)
 | 2026-11-26 | Approving a `needs_review` approval resumes that routine run | Otherwise the draft would be approved and then never sent. |
 | 2026-11-26 | A missed firing is skipped, not queued | A routine that overruns, or a server that was down, must not cause a burst of runs. |
 | 2026-11-26 | UUID v7 ids carry sub-millisecond time and never go backwards in a process | Rows are listed in id order; same-millisecond ids could swap. |
+| 2026-11-26 | Using a Vault item always needs approval | The model never sees the value, but it chooses where the value goes; a tricked Bot could send it anywhere a tool reaches. |
+| 2026-11-26 | App tools are built per Bot, not registered globally | A Bot without an app must not have its tools at all, even if it asks for one by name. |
+| 2026-11-26 | A development stand-in replaces Composio when no key is set | Every flow can be built and tested without an account; it sends nothing. |
+| 2026-11-26 | MCP headers are a Vault item holding JSON | Keeps secrets out of `connectors`; one item can hold several headers. |

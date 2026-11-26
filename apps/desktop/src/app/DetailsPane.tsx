@@ -6,10 +6,8 @@ import { useSendMessage } from "@/features/chat/api";
 import { ScreenPanel } from "@/features/computer/ScreenPanel";
 import { RoutinesTab } from "@/features/routines/RoutinesTab";
 import { MemoryTab } from "@/features/memory/MemoryTab";
+import { AppsTab } from "@/features/settings/AppsTab";
 import { SkillsTab } from "@/features/skills/SkillsTab";
-
-// Empty for now; each fills in with its phase.
-const LATER_TABS = [{ value: "apps", label: "Apps", text: "The apps this Bot may use." }];
 
 export type DetailsTab = "screen" | "memory" | "skills" | "routines" | "apps" | "settings";
 
@@ -23,6 +21,8 @@ interface DetailsPaneProps {
   interactive: boolean;
   onInteractiveChange: (interactive: boolean) => void;
   onDeleted: () => void;
+  /** Opens the app's Settings (to connect more apps). */
+  onOpenSettings: () => void;
 }
 
 export function DetailsPane({
@@ -34,6 +34,7 @@ export function DetailsPane({
   interactive,
   onInteractiveChange,
   onDeleted,
+  onOpenSettings,
 }: DetailsPaneProps) {
   const sendMessage = useSendMessage(bot.direct_chat_id ?? "");
   return (
@@ -47,11 +48,7 @@ export function DetailsPane({
           <TabsTrigger value="memory">Memory</TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
           <TabsTrigger value="routines">Routines</TabsTrigger>
-          {LATER_TABS.map((item) => (
-            <TabsTrigger key={item.value} value={item.value}>
-              {item.label}
-            </TabsTrigger>
-          ))}
+          <TabsTrigger value="apps">Apps</TabsTrigger>
           <TabsTrigger value="settings">Settings</TabsTrigger>
         </TabsList>
         <TabsContent value="screen">
@@ -80,13 +77,9 @@ export function DetailsPane({
         <TabsContent value="routines">
           {tab === "routines" && <RoutinesTab bot={bot} />}
         </TabsContent>
-        {LATER_TABS.map((item) => (
-          <TabsContent key={item.value} value={item.value}>
-            <p className="text-muted-foreground p-4 text-center text-sm">
-              {item.text} Not available yet.
-            </p>
-          </TabsContent>
-        ))}
+        <TabsContent value="apps">
+          {tab === "apps" && <AppsTab bot={bot} onOpenSettings={onOpenSettings} />}
+        </TabsContent>
         <TabsContent value="settings" className="space-y-6 pt-2">
           <BotSettings bot={bot} onDeleted={onDeleted} />
           <ComputerStatus onStopping={() => onInteractiveChange(false)} />

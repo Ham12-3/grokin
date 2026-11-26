@@ -34,10 +34,12 @@ from crew.budget import BudgetStop, check_budget, step_limit_stop
 from crew.computer.provider import ComputerProvider
 from crew.computer.service import RunComputer
 from crew.config import Settings
+from crew.connectors import service as connector_service
 from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
 from crew.models import Approval, Bot, Chat, Memory, Message, Routine, Run, Skill, ToolCall
 from crew.schemas.chat import MessageOut
 from crew.schemas.run import ToolCallOut
+from crew.tools.connectors import registry_for_bot
 from crew.tools.handoff import NAME as HANDOFF
 from crew.tools.registry import (
     Tool,
@@ -47,6 +49,7 @@ from crew.tools.registry import (
     preview_for,
     validation_message,
 )
+from crew.vault import inject
 
 log = structlog.get_logger(__name__)
 
@@ -322,6 +325,8 @@ async def _run_tool(
         args: dict[str, Any] = use.input if isinstance(use.input, dict) else {}
         invalid = None if tool is None else validation_message(tool, use.input)
         risk = tool.risk(args, ctx) if tool is not None and invalid is None else "safe"
+        if inject.names_in(args):
+            risk = "risky"  # using a Vault secret always asks the user first
         summary = (
             tool.summary(args) if tool is not None else f"Tried an unknown tool: {use.name[:40]}"
         )
@@ -470,6 +475,9 @@ async def _loop(
     ctx: ToolContext,
 ) -> Outcome:
     settings = state.settings
+    # Built-in tools plus the apps this Bot may use.
+    registry = await registry_for_bot(session, registry, bot)
+    apps = await connector_service.for_bot(session, bot)
     memories = (
         await session.scalars(select(Memory).where(Memory.bot_id == bot.id).order_by(Memory.id))
     ).all()
@@ -487,7 +495,12 @@ async def _loop(
             ).all()
         )
     system = build_system_prompt(
-        bot, memories=memories, skills=skills, invoked=invoked, other_bots=other_bots
+        bot,
+        memories=memories,
+        skills=skills,
+        invoked=invoked,
+        other_bots=other_bots,
+        apps=[connector.name for connector in apps],
     )
     # Only the Primary Bot, and only when there is someone to hand to, gets `handoff`.
     tools = [
@@ -657,6 +670,9 @@ async def run_agent(
     provider: ComputerProvider,
     llm_error: LLMError | None = None,
     queue: Any = None,
+    vault: Any = None,
+    connectors: Any = None,
+    mcp_opener: Any = None,
 ) -> str:
     """Runs one queued run to its end. Returns the final status.
 
@@ -747,6 +763,9 @@ async def run_agent(
         chat_id=run.chat_id,
         redis=redis,
         queue=queue,
+        vault=vault,
+        connectors=connectors,
+        mcp_opener=mcp_opener,
     )
     try:
         if llm_error is not None or llm is None:
@@ -764,6 +783,7 @@ async def run_agent(
         log.exception("run.crashed", run_id=str(run_id), error=type(error).__name__)
         outcome = Outcome("failed", error=LLMError("run_failed", GENERIC_ERROR))
     watcher.cancel()
+    inject.forget_active()
 
     finalize = asyncio.create_task(_finalize(state, session, session_factory, outcome, computer))
     await _wait_shielded(finalize, state)

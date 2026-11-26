@@ -66,6 +66,12 @@ class ToolContext:
     chat_id: uuid.UUID | None = None
     redis: Any = None
     queue: Any = None  # anything with `enqueue_job(name, *args)`
+    # Unwraps Vault keys (`crew.vault.crypto.KeyWrapper`). None: the Vault is not set up.
+    vault: Any = None
+    # Runs app actions (`crew.connectors.backend.ConnectorBackend`). None: not set up.
+    connectors: Any = None
+    # Tests only: opens MCP clients without a network.
+    mcp_opener: Any = None
 
 
 @dataclass(frozen=True)
@@ -122,10 +128,20 @@ class Tool:
     max_output_chars: int = 20_000
 
 
+VAULT_PLACEHOLDER = re.compile(r"\{\{\s*vault:([a-z][a-z0-9_]{1,39})\s*\}\}")
+
+
 def preview_for(tool: Tool, args: Args, ctx: ToolContext) -> Preview:
     if tool.preview is not None:
-        return tool.preview(args, ctx)
-    return Preview("generic", f"Allow {tool.name.replace('_', ' ')}", dict(args))
+        preview = tool.preview(args, ctx)
+    else:
+        preview = Preview("generic", f"Allow {tool.name.replace('_', ' ')}", dict(args))
+    names = sorted(set(VAULT_PLACEHOLDER.findall(str(args))))
+    if names:
+        # The card says which secrets this action would use (never their values).
+        context = {**preview.context, "vault": ", ".join(names)}
+        preview = Preview(preview.kind, preview.title, preview.fields, context)
+    return preview
 
 
 def wrap_untrusted(text: str, source: str) -> str:

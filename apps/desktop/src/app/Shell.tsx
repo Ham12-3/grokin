@@ -4,6 +4,7 @@ import { DetailsPane, type DetailsTab } from "./DetailsPane";
 import { Sidebar } from "./Sidebar";
 import { Button } from "@/components/ui/button";
 import { ApprovalsScreen } from "@/features/approvals/ApprovalsScreen";
+import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { useApprovals } from "@/features/approvals/api";
 import { NewBotDialog } from "@/features/bots/NewBotDialog";
 import { useBots, type Bot } from "@/features/bots/api";
@@ -38,7 +39,9 @@ export function Shell() {
   // True while the user is in control of the screen (Take over).
   const [interactive, setInteractive] = useState(false);
   const [newBotOpen, setNewBotOpen] = useState(false);
-  const [approvalsOpen, setApprovalsOpen] = useState(false);
+  const [screen, setScreen] = useState<"chat" | "approvals" | "settings">("chat");
+  const approvalsOpen = screen === "approvals";
+  const setApprovalsOpen = (open: boolean) => setScreen(open ? "approvals" : "chat");
   const approvals = useApprovals();
   const pending = approvals.data;
   const pendingCount = pending?.length ?? 0;
@@ -141,6 +144,8 @@ export function Shell() {
           pendingApprovals={pendingCount}
           approvalsOpen={approvalsOpen}
           onOpenApprovals={() => setApprovalsOpen(true)}
+          settingsOpen={screen === "settings"}
+          onOpenSettings={() => setScreen("settings")}
           userLabel={me.data?.name ?? me.data?.email ?? ""}
           onSelect={select}
           onNewBot={() => setNewBotOpen(true)}
@@ -148,10 +153,11 @@ export function Shell() {
         />
 
         {approvalsOpen && <ApprovalsScreen bots={list} onOpenBot={select} />}
-        {!approvalsOpen && bots.isPending && (
+        {screen === "settings" && <SettingsScreen />}
+        {screen === "chat" && bots.isPending && (
           <p className="text-muted-foreground flex-1 p-8 text-center text-sm">Loading...</p>
         )}
-        {!approvalsOpen && bots.isError && (
+        {screen === "chat" && bots.isError && (
           <div className="flex-1 space-y-3 p-8 text-center">
             <p role="alert" className="text-destructive text-sm">
               {errorMessage(bots.error, "Could not load your Bots.")}
@@ -161,7 +167,7 @@ export function Shell() {
             </Button>
           </div>
         )}
-        {!approvalsOpen && bots.isSuccess && !selected && (
+        {screen === "chat" && bots.isSuccess && !selected && (
           <div className="flex flex-1 flex-col items-center justify-center gap-3 p-8 text-center">
             <h2 className="text-lg font-semibold">Create your first Bot</h2>
             <p className="text-muted-foreground max-w-sm text-sm">
@@ -170,7 +176,7 @@ export function Shell() {
             <Button onClick={() => setNewBotOpen(true)}>New Bot</Button>
           </div>
         )}
-        {!approvalsOpen && selected?.direct_chat_id && (
+        {screen === "chat" && selected?.direct_chat_id && (
           <ChatView
             key={selected.direct_chat_id}
             bot={selected}
@@ -185,7 +191,7 @@ export function Shell() {
             onOpenBot={select}
           />
         )}
-        {!approvalsOpen && selected && detailsOpen && (
+        {screen === "chat" && selected && detailsOpen && (
           <DetailsPane
             key={selected.id}
             bot={selected}
@@ -196,6 +202,7 @@ export function Shell() {
             interactive={interactive}
             onInteractiveChange={setInteractive}
             onDeleted={() => select(null)}
+            onOpenSettings={() => setScreen("settings")}
           />
         )}
       </div>

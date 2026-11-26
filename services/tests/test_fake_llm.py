@@ -60,7 +60,16 @@ async def test_no_link_is_an_echo() -> None:
 
 
 async def test_email_drafts_an_email_for_approval() -> None:
-    assert await _play("Email sam@example.com to say the report is ready") == ["email_send"]
+    mail: list[dict[str, Any]] = [
+        {"name": name, "description": "", "input_schema": {}}
+        for name in ("email_send", "email_search")
+    ]
+    request = "Email sam@example.com to say the report is ready"
+    assert await _play(request, tools=mail) == ["email_send"]
+    assert await _play("Summarise my unread emails", tools=mail) == ["email_search"]
+    # Without Gmail it says how to connect it instead of calling a tool it does not have.
+    assert await _play(request) == []
+    assert await _play("Summarise my unread emails") == []
 
 
 async def test_memory_skill_and_handoff_triggers() -> None:

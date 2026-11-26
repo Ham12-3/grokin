@@ -13,10 +13,21 @@ from crew import events
 from crew.approvals import gate
 from crew.llm.base import ToolUse
 from crew.llm.fake import FakeLLM, Turn
-from crew.models import ConnectorLog, Run, ToolCall
+from crew.models import Bot, ConnectorLog, Run, ToolCall
 from crew.tools import default_registry
+from crew.tools.connectors import registry_for_bot
+from crew.tools.registry import ToolRegistry
 from tests.conftest import Ctx
-from tests.helpers import API, Listener, create_bot, run_worker, send, sign_in, tool_context
+from tests.helpers import (
+    API,
+    Listener,
+    connect_app,
+    create_bot,
+    run_worker,
+    send,
+    sign_in,
+    tool_context,
+)
 
 EMAIL = {"to": "sam@example.com", "subject": "Report", "body": "The report is ready."}
 
@@ -28,6 +39,8 @@ def _use(name: str, **args: Any) -> ToolUse:
 async def _setup(ctx: Ctx, **bot_fields: str) -> tuple[dict[str, str], dict[str, Any], str]:
     me = await sign_in(ctx, "a@example.com")
     bot = await create_bot(ctx, me, **bot_fields)
+    await connect_app(ctx, me, bot, "gmail")
+    await connect_app(ctx, me, bot, "slack")
     user_id = (await ctx.client.get(f"{API}/me", headers=me)).json()["id"]
     return me, bot, user_id
 
@@ -260,6 +273,16 @@ async def _risky_row(ctx: Ctx, run_id: str) -> ToolCall:
     return row
 
 
+async def _bot_registry(ctx: Ctx, row: ToolCall) -> ToolRegistry:
+    """The tools of the Bot behind this call, with its apps."""
+    async with ctx.session_factory() as session:
+        run = await session.get(Run, row.run_id)
+        assert run is not None
+        bot = await session.get(Bot, run.bot_id)
+        assert bot is not None
+        return await registry_for_bot(session, default_registry(), bot)
+
+
 @pytest.mark.parametrize("state", ["pending", "rejected", "expired", "missing", "other_user"])
 async def test_the_worker_refuses_a_risky_call_without_an_approved_row(
     ctx: Ctx, tmp_path: Path, state: str
@@ -267,7 +290,7 @@ async def test_the_worker_refuses_a_risky_call_without_an_approved_row(
     """Defence in depth: the gate decides from the database, not from what the loop thinks."""
     _, run_id, _ = await _email_run(ctx)
     row = await _risky_row(ctx, run_id)
-    registry = default_registry()
+    registry = await _bot_registry(ctx, row)
     tool = registry.get("email_send")
     assert tool is not None
     async with ctx.session_factory() as session:
@@ -288,7 +311,9 @@ async def test_the_worker_refuses_a_risky_call_without_an_approved_row(
 
     async with httpx.AsyncClient() as http, ctx.session_factory() as session:
         tool_ctx = dataclasses.replace(
-            tool_context(http, tmp_path), session_factory=ctx.session_factory
+            tool_context(http, tmp_path),
+            session_factory=ctx.session_factory,
+            connectors=ctx.app.state.connectors,
         )
         row = await session.merge(row)
         # Even if a buggy or tricked loop says "never ask", or marks the row as running.
@@ -303,7 +328,7 @@ async def test_an_approved_row_is_good_for_one_execution(ctx: Ctx, tmp_path: Pat
     (pending,) = await _pending(ctx, me)
     await ctx.client.post(f"{API}/approvals/{pending['id']}/approve", headers=me)
     row = await _risky_row(ctx, run_id)
-    registry = default_registry()
+    registry = await _bot_registry(ctx, row)
     tool = registry.get("email_send")
     assert tool is not None
 
@@ -311,6 +336,7 @@ async def test_an_approved_row_is_good_for_one_execution(ctx: Ctx, tmp_path: Pat
         tool_ctx = dataclasses.replace(
             tool_context(http, tmp_path),
             session_factory=ctx.session_factory,
+            connectors=ctx.app.state.connectors,
             user_id=row.user_id,
             run_id=row.run_id,
         )
@@ -373,7 +399,13 @@ async def test_two_risky_calls_in_one_step_are_asked_one_at_a_time(ctx: Ctx) -> 
     sent = await send(ctx, me, bot["direct_chat_id"], "email and post")
     llm = FakeLLM(
         [
-            Turn([], [_use("email_send", **EMAIL), _use("social_post", text="We shipped!")]),
+            Turn(
+                [],
+                [
+                    _use("email_send", **EMAIL),
+                    _use("slack_post", channel="#general", text="We shipped!"),
+                ],
+            ),
             Turn(["done"]),
         ]
     )
@@ -385,8 +417,12 @@ async def test_two_risky_calls_in_one_step_are_asked_one_at_a_time(ctx: Ctx) -> 
     assert await run_worker(ctx, sent["run_id"], llm) == "waiting_approval"
     assert await _log(ctx) == [{"tool": "email_send", **EMAIL}]
     (second,) = await _pending(ctx, me)
-    assert second["tool"] == "social_post"
-    assert second["preview"] == {"kind": "post", "fields": {"text": "We shipped!"}, "context": {}}
+    assert second["tool"] == "slack_post"
+    assert second["preview"] == {
+        "kind": "post",
+        "fields": {"channel": "#general", "text": "We shipped!"},
+        "context": {},
+    }
     await ctx.client.post(f"{API}/approvals/{second['id']}/reject", headers=me)
 
     assert await run_worker(ctx, sent["run_id"], llm) == "completed"

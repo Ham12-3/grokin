@@ -1,4 +1,4 @@
-import { Inbox, LogOut, Plus, Star } from "lucide-react";
+import { Inbox, LogOut, Plus, Settings, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -19,6 +19,8 @@ interface SidebarProps {
   pendingApprovals: number;
   approvalsOpen: boolean;
   onOpenApprovals: () => void;
+  settingsOpen: boolean;
+  onOpenSettings: () => void;
   userLabel: string;
   onSelect: (botId: string) => void;
   onNewBot: () => void;
@@ -33,6 +35,8 @@ export function Sidebar({
   pendingApprovals,
   approvalsOpen,
   onOpenApprovals,
+  settingsOpen,
+  onOpenSettings,
   userLabel,
   onSelect,
   onNewBot,
@@ -92,11 +96,16 @@ export function Sidebar({
             <li key={bot.id}>
               <button
                 type="button"
-                aria-current={bot.id === selectedId && !approvalsOpen ? "page" : undefined}
+                aria-current={
+                  bot.id === selectedId && !approvalsOpen && !settingsOpen ? "page" : undefined
+                }
                 onClick={() => onSelect(bot.id)}
                 className={cn(
                   "hover:bg-sidebar-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                  bot.id === selectedId && !approvalsOpen && "bg-sidebar-accent font-medium",
+                  bot.id === selectedId &&
+                    !approvalsOpen &&
+                    !settingsOpen &&
+                    "bg-sidebar-accent font-medium",
                 )}
               >
                 <span aria-hidden>{bot.avatar ?? "🤖"}</span>
@@ -113,6 +122,15 @@ export function Sidebar({
 
       <div className="border-border flex items-center gap-2 border-t px-3 py-2">
         <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{userLabel}</span>
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Settings"
+          aria-pressed={settingsOpen}
+          onClick={onOpenSettings}
+        >
+          <Settings />
+        </Button>
         <Button variant="ghost" size="icon" aria-label="Sign out" onClick={onSignOut}>
           <LogOut />
         </Button>

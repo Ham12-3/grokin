@@ -105,6 +105,8 @@ class Settings(BaseSettings):
 
     # Connectors
     composio_api_key: str = Field(default="", repr=False)
+    # Development only: lets a custom MCP server be on this machine or a private network.
+    mcp_allow_private: bool = False
 
     # Vault
     vault_master_key: str = Field(default="", repr=False)

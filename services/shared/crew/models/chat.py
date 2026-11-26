@@ -12,8 +12,10 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Text,
     UniqueConstraint,
+    Uuid,
     func,
     text,
 )
@@ -44,6 +46,8 @@ class Bot(Base, IdMixin, TimestampMixin):
     approval_mode: Mapped[str] = mapped_column(Text, server_default=text("'ask_risky'"))
     is_primary: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     enabled_tools: Mapped[list[str]] = mapped_column(ARRAY(Text), server_default=text("'{}'"))
+    # Connector ids this Bot may use (the Apps tab). Empty means none.
+    apps: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(Uuid), server_default=text("'{}'"))
 
 
 class Chat(Base, IdMixin, TimestampMixin):
@@ -219,6 +223,40 @@ class Routine(Base, IdMixin, TimestampMixin):
     next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Each routine has its own chat: its runs never wait behind (or block) the user's chat.
     chat_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"))
+
+
+class VaultItem(Base, IdMixin, TimestampMixin):
+    """One secret. Only ciphertext is stored; see `crew.vault.crypto`."""
+
+    __tablename__ = "vault_items"
+    __table_args__ = (UniqueConstraint("user_id", "name"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(Text)  # used in {{vault:name}}
+    type: Mapped[str] = mapped_column(Text)  # login | api_key | card | note | oauth_token
+    ciphertext: Mapped[bytes] = mapped_column(LargeBinary)  # AES-256-GCM
+    nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    wrapped_data_key: Mapped[bytes] = mapped_column(LargeBinary)
+    # Which key wrapped the data key: "master" or "kms".
+    wrapped_by: Mapped[str] = mapped_column(Text, server_default=text("'master'"))
+
+
+class Connector(Base, IdMixin, TimestampMixin):
+    """An app the user connected (Gmail, Slack, ...) or a custom MCP server."""
+
+    __tablename__ = "connectors"
+    __table_args__ = (Index("ix_connectors_user", "user_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    kind: Mapped[str] = mapped_column(Text)  # gmail | gcal | slack | notion | mcp
+    name: Mapped[str] = mapped_column(Text)
+    # MCP URL and tool list, or the provider's connection id. Never secrets.
+    config: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'"))
+    # Vault item holding tokens or headers, if any.
+    secret_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("vault_items.id", ondelete="SET NULL")
+    )
+    status: Mapped[str] = mapped_column(Text, server_default=text("'connected'"))
 
 
 class Computer(Base, IdMixin, TimestampMixin):

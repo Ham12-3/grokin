@@ -90,3 +90,20 @@ async def test_health_with_real_services() -> None:
     if result.status != "ok" and not os.environ.get("CREW_REQUIRE_SERVICES"):
         pytest.skip("Postgres or Redis not reachable (run `make up`)")
     assert result.status == "ok"
+
+
+@pytest.mark.parametrize("method", ["GET", "POST", "PUT", "PATCH", "DELETE"])
+async def test_the_desktop_app_may_use_every_method_the_api_has(
+    client: AsyncClient, method: str
+) -> None:
+    """The app runs on another origin: the browser asks first (a pre-flight request)."""
+    resp = await client.options(
+        "/api/v1/bots/x/apps",
+        headers={
+            "Origin": "http://localhost:1420",
+            "Access-Control-Request-Method": method,
+            "Access-Control-Request-Headers": "authorization,content-type",
+        },
+    )
+    assert resp.status_code == 200, method
+    assert method in resp.headers["access-control-allow-methods"]

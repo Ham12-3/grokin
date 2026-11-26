@@ -152,7 +152,30 @@ const ROUTINE = {
   webhook_url: null as string | null,
 };
 
+const GMAIL = {
+  id: "c-gmail",
+  kind: "gmail",
+  name: "Gmail",
+  status: "connected",
+  url: null,
+  tools: [],
+};
+const MCP = {
+  id: "c-mcp",
+  kind: "mcp",
+  name: "Tickets",
+  status: "connected",
+  url: "https://mcp.example.com/mcp" as string | null,
+  tools: [
+    { name: "lookup", description: "Look up a ticket", safe: false },
+    { name: "close", description: "Close a ticket", safe: false },
+  ],
+};
+
 function fakeApi(initial: {
+  connectors?: (typeof MCP)[];
+  botApps?: string[];
+  vault?: string[];
   routines?: (typeof ROUTINE)[];
   memory?: string[];
   skills?: (typeof SKILL)[];
@@ -173,6 +196,14 @@ function fakeApi(initial: {
   const bots = [...(initial.bots ?? [])];
   const approvals = [...(initial.approvals ?? [])];
   const skills = [...(initial.skills ?? [])];
+  const connectors = (initial.connectors ?? []).map((item) => ({ ...item }));
+  let botApps = [...(initial.botApps ?? [])];
+  const vault = (initial.vault ?? []).map((name, index) => ({
+    id: `v-${index + 1}`,
+    name,
+    type: "api_key",
+    created_at: "2026-01-01T00:00:00Z",
+  }));
   const routines = (initial.routines ?? []).map((routine) => ({ ...routine }));
   const memory = (initial.memory ?? []).map((text, index) => ({
     id: `mem-${index + 1}`,
@@ -192,6 +223,56 @@ function fakeApi(initial: {
       return json({ email: "sam@example.com", name: "Sam", daily_token_budget: 1 });
     }
     if (path === "/bots" && method === "GET") return json(bots);
+    if (path === "/vault" && method === "GET") return json(vault);
+    if (path === "/vault" && method === "POST") {
+      const input = body as { name: string; type: string };
+      const item = { id: "v-new", name: input.name, type: input.type, created_at: "" };
+      vault.push(item);
+      return json(item, 201);
+    }
+    if (path.startsWith("/vault/") && method === "DELETE") {
+      vault.splice(0, vault.length);
+      return new Response(null, { status: 204 });
+    }
+    if (path === "/connectors" && method === "GET") {
+      return json({
+        available: [
+          { kind: "gmail", name: "Gmail" },
+          { kind: "slack", name: "Slack" },
+        ],
+        connected: connectors,
+        configured: true,
+      });
+    }
+    if (path === "/connectors/mcp") {
+      const input = body as { name: string; url: string };
+      const server = { ...MCP, id: "c-new", name: input.name, url: input.url };
+      connectors.push(server);
+      return json(server, 201);
+    }
+    if (path.startsWith("/connectors/") && path.endsWith("/connect")) {
+      const kind = path.split("/")[2];
+      const started = { ...GMAIL, id: `c-${kind}`, kind, name: kind, status: "pending" };
+      connectors.push(started as unknown as typeof MCP);
+      return json({ connector: started, url: `https://connect.example/${kind}` });
+    }
+    if (path.startsWith("/connectors/") && method === "PATCH") {
+      const safe = (body as { safe_tools: string[] }).safe_tools;
+      const server = connectors.find((item) => path.endsWith(item.id));
+      if (server)
+        server.tools = server.tools.map((tool) => ({ ...tool, safe: safe.includes(tool.name) }));
+      return json(server);
+    }
+    if (path.startsWith("/connectors/") && method === "DELETE") {
+      const index = connectors.findIndex((item) => path.endsWith(item.id));
+      connectors.splice(index, 1);
+      return new Response(null, { status: 204 });
+    }
+    if (path.endsWith("/apps") && method === "GET") return json({ connector_ids: botApps });
+    if (path.endsWith("/apps") && method === "PUT") {
+      botApps = (body as { connector_ids: string[] }).connector_ids;
+      return json({ connector_ids: botApps });
+    }
     if (path.endsWith("/routines") && method === "GET") return json(routines);
     if (path === "/routines/preview") {
       const cron = (body as { cron: string }).cron;
@@ -1117,4 +1198,109 @@ test("the tray's Pause all routines pauses them", async () => {
     await within(details).findByRole("button", { name: "Resume Weekly Report" }),
   ).toBeInTheDocument();
   expect(calls.some((call) => call.path === "/routines/pause-all")).toBe(true);
+});
+
+// --- Settings: Vault, connectors, apps --------------------------------------------------
+
+async function openSettings() {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  render(<App />);
+  await screen.findByRole("log");
+  fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+  return screen.findByRole("region", { name: "Settings" });
+}
+
+test("the Vault takes a secret once and never shows it again", async () => {
+  const calls = fakeApi({ bots: [BOT], vault: ["old_key"] });
+  const settings = await openSettings();
+  const vault = within(settings).getByRole("region", { name: "Vault" });
+  expect(await within(vault).findByText("old_key")).toBeInTheDocument();
+
+  const value = within(vault).getByLabelText("Value");
+  expect(value).toHaveAttribute("type", "password"); // masked while typing
+  fireEvent.change(within(vault).getByLabelText("Name"), { target: { value: "GitHub_Token" } });
+  fireEvent.change(value, { target: { value: "ghp_secret123" } });
+  fireEvent.click(within(vault).getByRole("button", { name: "Add to Vault" }));
+
+  expect(await within(vault).findByText("github_token")).toBeInTheDocument();
+  expect(calls.find((call) => call.path === "/vault" && call.method === "POST")?.body).toEqual({
+    name: "github_token",
+    type: "api_key",
+    value: "ghp_secret123",
+  });
+  // Saved: the field is empty and the value is nowhere on the page.
+  expect(value).toHaveValue("");
+  expect(document.body.textContent).not.toContain("ghp_secret123");
+
+  fireEvent.click(within(vault).getByRole("button", { name: "Delete old_key" }));
+  await waitFor(() => expect(within(vault).queryByText("old_key")).not.toBeInTheDocument());
+});
+
+test("connecting an app opens the sign-in page in the browser", async () => {
+  const calls = fakeApi({ bots: [BOT] });
+  const settings = await openSettings();
+  const section = within(settings).getByRole("region", { name: "Connectors" });
+
+  fireEvent.click(await within(section).findByRole("button", { name: "Connect Gmail" }));
+
+  await waitFor(() =>
+    expect(mocked.openExternal).toHaveBeenCalledWith("https://connect.example/gmail"),
+  );
+  expect(await within(section).findByText("Finish in your browser")).toBeInTheDocument();
+  expect(calls.some((call) => call.path === "/connectors/gmail/connect")).toBe(true);
+  fireEvent.click(within(section).getByRole("button", { name: "Disconnect Gmail" }));
+  expect(await within(section).findByRole("button", { name: "Connect Gmail" })).toBeInTheDocument();
+});
+
+test("a custom MCP server lists its tools and each can be marked safe", async () => {
+  const calls = fakeApi({ bots: [BOT] });
+  const settings = await openSettings();
+  const section = within(settings).getByRole("region", { name: "Connectors" });
+  fireEvent.change(within(section).getByLabelText("Name"), { target: { value: "Tickets" } });
+  fireEvent.change(within(section).getByLabelText("Address"), {
+    target: { value: "https://mcp.example.com/mcp" },
+  });
+  fireEvent.click(within(section).getByRole("button", { name: "Add MCP server" }));
+
+  const tools = await within(section).findByRole("list", { name: "Tools of Tickets" });
+  expect(within(tools).getAllByText("asks every time")).toHaveLength(2);
+  expect(calls.find((call) => call.path === "/connectors/mcp")?.body).toEqual({
+    name: "Tickets",
+    url: "https://mcp.example.com/mcp",
+    headers_secret_ref: null,
+  });
+
+  fireEvent.click(within(tools).getByLabelText("lookup runs without asking"));
+  await waitFor(() =>
+    expect(calls.find((call) => call.method === "PATCH")?.body).toEqual({ safe_tools: ["lookup"] }),
+  );
+  expect(await within(tools).findByText("runs without asking")).toBeInTheDocument();
+});
+
+test("the Apps tab ticks which connected apps a Bot may use", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({
+    bots: [BOT],
+    connectors: [GMAIL as unknown as typeof MCP, MCP],
+    botApps: ["c-gmail"],
+  });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openTab("Apps");
+  const gmail = await within(details).findByLabelText("Gmail");
+  const tickets = within(details).getByLabelText(/Tickets/);
+  expect(gmail).toBeChecked();
+  expect(tickets).not.toBeChecked();
+
+  fireEvent.click(tickets);
+  await waitFor(() => expect(tickets).toBeChecked());
+  fireEvent.click(gmail);
+  await waitFor(() => expect(gmail).not.toBeChecked());
+  expect(calls.filter((call) => call.method === "PUT").map((call) => call.body)).toEqual([
+    { connector_ids: ["c-gmail", "c-mcp"] },
+    { connector_ids: ["c-mcp"] },
+  ]);
+
+  fireEvent.click(within(details).getByRole("button", { name: /Connect more apps/ }));
+  expect(await screen.findByRole("region", { name: "Settings" })).toBeInTheDocument();
 });

@@ -6,6 +6,7 @@ from crew.models.chat import (
     Chat,
     ChatMember,
     Computer,
+    Connector,
     ConnectorLog,
     Memory,
     Message,
@@ -14,6 +15,7 @@ from crew.models.chat import (
     Skill,
     ToolCall,
     UsageDaily,
+    VaultItem,
 )
 from crew.models.user import AuditLog, RefreshToken, User
 
@@ -24,6 +26,7 @@ __all__ = [
     "Chat",
     "ChatMember",
     "Computer",
+    "Connector",
     "ConnectorLog",
     "Memory",
     "Message",
@@ -34,4 +37,5 @@ __all__ = [
     "ToolCall",
     "UsageDaily",
     "User",
+    "VaultItem",
 ]

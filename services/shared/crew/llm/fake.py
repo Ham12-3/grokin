@@ -13,12 +13,14 @@ DEFAULT_REPLY = (
     "- Send a message with a link and it will read the page and save notes\n"
     "- Say `browse` with a link and it opens the page on its computer's screen\n"
     "- Say `sign in` with a link and it opens the page, then asks you to take over\n"
-    "- Say `email` with an address and it drafts an email for you to approve\n"
+    "- With Gmail connected: `email` with an address drafts one for approval, and "
+    "`unread emails` lists your inbox\n"
     "- Say `remember` or `I prefer` and it saves that to its memory\n"
     "- Say `save that as a skill` and it drafts a skill; `/` runs a saved one\n"
     "- Ask the Primary Bot for something that is another Bot's job and it passes it on\n\n"
     "You said: "
 )
+NO_GMAIL = "I cannot use email yet. Connect Gmail in Settings, then tick it in my Apps tab."
 URL_PATTERN = re.compile(r"https?://[^\s<>\"')]+")
 EMAIL_PATTERN = re.compile(r"\bemail\b.*?([\w.+-]+@[\w-]+(?:\.[\w-]+)+)", re.IGNORECASE | re.DOTALL)
 MEMORY_PATTERN = re.compile(r"\b(remember|i prefer|i like|i always|i never)\b", re.IGNORECASE)
@@ -70,7 +72,7 @@ def _first_turn(request: str, system: str, tools: list[ToolDefinition], number: 
     if running is not None:
         steps = system.split(running.group(0), 1)[1].strip()
         address = EMAIL_PATTERN.search(steps)
-        if address is not None:
+        if address is not None and "email_send" in names:
             # A skill that sends email: draft it, so a routine shows the needs-review path.
             draft = {"to": address.group(1), "subject": running.group(1), "body": steps[:500]}
             return Turn(
@@ -112,16 +114,30 @@ def _demo_turn(
     last = messages[-1] if messages else {"role": "user", "content": ""}
     request = _last_text(messages)
     if isinstance(last["content"], str):
-        special = _first_turn(request, system, tools or [], call_number)
-        if special is not None:
-            return special
+        offered = {tool["name"] for tool in tools or []}
+        if re.search(r"\b(unread|inbox|my emails?)\b", request, re.IGNORECASE):
+            if "email_search" not in offered:
+                return Turn(_words(NO_GMAIL))
+            return Turn(
+                ["Checking ", "your ", "inbox."],
+                [
+                    ToolUse(
+                        f"fake_{call_number}", "email_search", {"query": "is:unread", "limit": 5}
+                    )
+                ],
+            )
         address = EMAIL_PATTERN.search(request)
+        if address is not None and "email_send" not in offered:
+            return Turn(_words(NO_GMAIL))
         if address is not None:
             draft = {"to": address.group(1), "subject": "A note from Crew", "body": request}
             return Turn(
                 ["Here ", "is ", "the ", "email. ", "It ", "needs ", "your ", "approval."],
                 [ToolUse(f"fake_{call_number}", "email_send", draft)],
             )
+        special = _first_turn(request, system, tools or [], call_number)
+        if special is not None:
+            return special
         url = URL_PATTERN.search(request)
         if url is None:
             remembered = MEMORY_LINE.findall(
@@ -162,6 +178,10 @@ def _demo_turn(
         if last["content"][0].get("is_error"):
             return Turn(_words("I could not pass it on: " + result[:200]))
         return Turn(_words("I've passed this on. Open that Bot's chat to follow it."))
+    if previous.get("name") == "email_search":
+        subjects = re.findall(r'"subject": "([^"]+)"', result)
+        listing = "\n".join(f"- {subject}" for subject in subjects) or "- (nothing found)"
+        return Turn(_words(f"Your unread emails:\n{listing}"))
     if previous.get("name") == "email_send":
         if last["content"][0].get("is_error"):
             return Turn(["Understood. ", "I ", "did ", "not ", "send ", "it."])

@@ -15,7 +15,7 @@ from crew.llm.fake import FakeLLM, Turn
 from crew.models import Message, Routine, Run
 from crew.routines import schedule, service
 from tests.conftest import Ctx
-from tests.helpers import API, Listener, create_bot, run_worker, sign_in
+from tests.helpers import API, Listener, connect_app, create_bot, run_worker, sign_in
 
 SKILL = {"name": "Morning brief", "steps": "1. Write the brief", "description": "", "rules": ""}
 EMAIL = {"to": "sam@example.com", "subject": "Brief", "body": "Here it is."}
@@ -32,6 +32,7 @@ async def _setup(
 ) -> tuple[dict[str, str], dict[str, Any], str]:
     me = await sign_in(ctx, email)
     bot = await create_bot(ctx, me)
+    await connect_app(ctx, me, bot, "gmail")
     skill = (await ctx.client.post(f"{API}/bots/{bot['id']}/skills", headers=me, json=SKILL)).json()
     return me, bot, skill["id"]
 

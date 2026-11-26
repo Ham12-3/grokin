@@ -225,6 +225,9 @@ async def run_worker(
             provider=provider or ctx.app.state.provider,
             llm_error=llm_error,
             queue=ctx.queue,
+            vault=ctx.app.state.vault,
+            connectors=ctx.app.state.connectors,
+            mcp_opener=ctx.app.state.mcp_opener,
         )
 
 
@@ -252,3 +255,20 @@ class Listener:
 
     def of(self, event_type: str) -> list[dict[str, Any]]:
         return [event for event in self.events if event["type"] == event_type]
+
+
+async def connect_app(
+    ctx: Ctx, headers: dict[str, str], bot: dict[str, Any], kind: str = "gmail"
+) -> dict[str, Any]:
+    """Connects an app (the stand-in backend connects at once) and lets the Bot use it."""
+    started = await ctx.client.post(f"{API}/connectors/{kind}/connect", headers=headers)
+    assert started.status_code == 200, started.text
+    connector: dict[str, Any] = started.json()["connector"]
+    current = (await ctx.client.get(f"{API}/bots/{bot['id']}/apps", headers=headers)).json()
+    allowed = await ctx.client.put(
+        f"{API}/bots/{bot['id']}/apps",
+        headers=headers,
+        json={"connector_ids": [*current["connector_ids"], connector["id"]]},
+    )
+    assert allowed.status_code == 200, allowed.text
+    return connector

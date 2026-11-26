@@ -20,9 +20,11 @@ from api.routers import (
     bots,
     chats,
     computer,
+    connectors,
     routines,
     runs,
     skills,
+    vault,
     webhooks,
 )
 from crew import __version__
@@ -30,11 +32,15 @@ from crew.auth.mailer import create_mailer
 from crew.auth.tokens import require_jwt_secret
 from crew.computer import create_provider
 from crew.config import Settings, get_settings
+from crew.connectors.backend import create_backend
+from crew.connectors.mcp_client import open_http
 from crew.db import create_engine, create_session_factory
 from crew.errors import AppError
 from crew.health import get_health
+from crew.logs import configure as configure_logging
 from crew.schemas.health import HealthResponse
 from crew.tools import default_registry
+from crew.vault.crypto import VaultError, create_wrapper
 
 API_PREFIX = get_settings().api_prefix
 
@@ -57,6 +63,8 @@ router.include_router(approvals.router)
 router.include_router(skills.router)
 router.include_router(routines.router)
 router.include_router(webhooks.router)
+router.include_router(vault.router)
+router.include_router(connectors.router)
 router.include_router(ws.router)
 
 
@@ -96,6 +104,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.provider = create_provider(settings)
     # Only to check edited approval arguments against tool schemas; the API runs no tools.
     app.state.registry = default_registry()
+    configure_logging(settings.log_level)
+    try:
+        app.state.vault = create_wrapper(settings)
+    except VaultError:
+        app.state.vault = None  # the Vault routes then answer 503 with a clear message
+    app.state.connectors = create_backend(settings, app.state.session_factory, app.state.http)
+    app.state.mcp_opener = open_http
     app.state.queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         yield
@@ -112,7 +127,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=get_settings().cors_origins,
-        allow_methods=["GET", "POST", "PATCH", "DELETE"],
+        allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
         allow_headers=["Authorization", "Content-Type"],
     )
     app.add_exception_handler(AppError, _app_error)

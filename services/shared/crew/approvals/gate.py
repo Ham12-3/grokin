@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from crew.approvals import policy
 from crew.models import Approval, ToolCall
 from crew.tools.registry import Args, Tool, ToolContext, ToolRegistry, ToolResult
+from crew.vault import inject
 
 
 class NotApproved(Exception):
@@ -28,6 +29,8 @@ async def authorize(
     needs_approval = (
         row.risk == "risky"
         or policy.check(approval_mode, tool, tool.risk(args, ctx)).needs_approval
+        # A secret can be sent anywhere a tool can reach: the user decides each time.
+        or bool(inject.names_in(args))
     )
     if not needs_approval:
         return args
@@ -62,4 +65,18 @@ async def execute(
 ) -> tuple[ToolResult, Args]:
     """Runs one recorded tool call if it is allowed to. Returns the result and the args used."""
     args = await authorize(session, row, tool, approval_mode, ctx)
-    return await registry.execute(tool, args, ctx), args
+    # Vault values go in here, at the last moment, and are scrubbed from whatever comes back.
+    try:
+        real_args, secrets = await inject.resolve(
+            session, ctx.vault, row.user_id, args, tool=tool.name
+        )
+    except inject.MissingSecret as error:
+        return ToolResult(False, str(error), "A Vault item is missing"), args
+    result = await registry.execute(tool, real_args, ctx)
+    if secrets:
+        result = ToolResult(
+            result.ok,
+            inject.redact(result.content, secrets),
+            inject.redact(result.summary, secrets),
+        )
+    return result, args

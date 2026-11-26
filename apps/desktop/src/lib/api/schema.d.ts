@@ -690,6 +690,131 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/vault": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Items */
+        get: operations["list_items_api_v1_vault_get"];
+        put?: never;
+        /** Add Item */
+        post: operations["add_item_api_v1_vault_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/vault/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Item */
+        delete: operations["delete_item_api_v1_vault__item_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Connectors */
+        get: operations["list_connectors_api_v1_connectors_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/mcp": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Add Mcp */
+        post: operations["add_mcp_api_v1_connectors_mcp_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/{kind}/connect": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Connect */
+        post: operations["connect_api_v1_connectors__kind__connect_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/connectors/{connector_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Disconnect */
+        delete: operations["disconnect_api_v1_connectors__connector_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Connector */
+        patch: operations["update_connector_api_v1_connectors__connector_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/bots/{bot_id}/apps": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Bot Apps */
+        get: operations["get_bot_apps_api_v1_bots__bot_id__apps_get"];
+        /**
+         * Set Bot Apps
+         * @description Which connected apps this Bot may use. A Bot gets no app tools unless listed here.
+         */
+        put: operations["set_bot_apps_api_v1_bots__bot_id__apps_put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -766,6 +891,18 @@ export interface components {
             edited_args?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** AvailableApp */
+        AvailableApp: {
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+        };
+        /** BotApps */
+        BotApps: {
+            /** Connector Ids */
+            connector_ids: string[];
         };
         /** BotCreate */
         BotCreate: {
@@ -886,6 +1023,12 @@ export interface components {
             /** Last Active At */
             last_active_at: string | null;
         };
+        /** ConnectStarted */
+        ConnectStarted: {
+            connector: components["schemas"]["ConnectorOut"];
+            /** Url */
+            url: string | null;
+        };
         /**
          * ConnectorEventTrigger
          * @description Stored now, fired once connectors exist (phase 8).
@@ -900,6 +1043,41 @@ export interface components {
             connector: string;
             /** Event */
             event: string;
+        };
+        /** ConnectorList */
+        ConnectorList: {
+            /** Available */
+            available: components["schemas"]["AvailableApp"][];
+            /** Connected */
+            connected: components["schemas"]["ConnectorOut"][];
+            /** Configured */
+            configured: boolean;
+        };
+        /** ConnectorOut */
+        ConnectorOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Kind */
+            kind: string;
+            /** Name */
+            name: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "connected" | "pending" | "error";
+            /** Url */
+            url?: string | null;
+            /** Tools */
+            tools?: components["schemas"]["McpToolOut"][];
+        };
+        /** ConnectorUpdate */
+        ConnectorUpdate: {
+            /** Safe Tools */
+            safe_tools: string[];
         };
         /** CronPreview */
         CronPreview: {
@@ -1008,6 +1186,24 @@ export interface components {
         LogoutRequest: {
             /** Refresh Token */
             refresh_token: string;
+        };
+        /** McpCreate */
+        McpCreate: {
+            /** Name */
+            name: string;
+            /** Url */
+            url: string;
+            /** Headers Secret Ref */
+            headers_secret_ref?: string | null;
+        };
+        /** McpToolOut */
+        McpToolOut: {
+            /** Name */
+            name: string;
+            /** Description */
+            description: string;
+            /** Safe */
+            safe: boolean;
         };
         /** MeResponse */
         MeResponse: {
@@ -1397,6 +1593,41 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** VaultItemCreate */
+        VaultItemCreate: {
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "login" | "api_key" | "card" | "note" | "oauth_token";
+            /** Value */
+            value: string;
+        };
+        /**
+         * VaultItemOut
+         * @description Name and type only. There is no field for the value.
+         */
+        VaultItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "login" | "api_key" | "card" | "note" | "oauth_token";
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
         };
         /** WebhookTrigger */
         WebhookTrigger: {
@@ -2917,6 +3148,302 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["CancelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_items_api_v1_vault_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultItemOut"][];
+                };
+            };
+        };
+    };
+    add_item_api_v1_vault_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VaultItemCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VaultItemOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_item_api_v1_vault__item_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_connectors_api_v1_connectors_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorList"];
+                };
+            };
+        };
+    };
+    add_mcp_api_v1_connectors_mcp_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["McpCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    connect_api_v1_connectors__kind__connect_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kind: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectStarted"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    disconnect_api_v1_connectors__connector_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connector_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_connector_api_v1_connectors__connector_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                connector_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["ConnectorUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ConnectorOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_bot_apps_api_v1_bots__bot_id__apps_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotApps"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    set_bot_apps_api_v1_bots__bot_id__apps_put: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["BotApps"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["BotApps"];
                 };
             };
             /** @description Validation Error */

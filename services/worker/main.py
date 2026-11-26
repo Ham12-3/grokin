@@ -13,11 +13,15 @@ from crew.agent.loop import run_agent as run_agent_impl
 from crew.computer import create_provider
 from crew.computer.service import stop_idle_computers
 from crew.config import get_settings
+from crew.connectors import events as connector_events
+from crew.connectors.backend import create_backend
 from crew.db import create_engine, create_session_factory
 from crew.llm import LLMError, create_llm
+from crew.logs import configure as configure_logging
 from crew.memory.service import compact_memory as compact_memory_impl
 from crew.routines import service as routines
 from crew.tools import default_registry
+from crew.vault.crypto import VaultError, create_wrapper
 
 log = structlog.get_logger(__name__)
 
@@ -31,6 +35,13 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["http"] = httpx.AsyncClient(follow_redirects=False)
     ctx["registry"] = default_registry()
     ctx["provider"] = create_provider(settings)
+    configure_logging(settings.log_level)
+    ctx["connectors"] = create_backend(settings, ctx["session_factory"], ctx["http"])
+    try:
+        ctx["vault"] = create_wrapper(settings)
+    except VaultError as error:
+        log.warning("worker.vault_not_configured", reason=str(error))
+        ctx["vault"] = None
     try:
         ctx["llm"] = create_llm(settings)
         ctx["llm_error"] = None
@@ -60,6 +71,8 @@ async def run_agent(ctx: dict[str, Any], run_id: str) -> str:
         provider=ctx["provider"],
         llm_error=ctx["llm_error"],
         queue=ctx["redis"],  # ARQ's own pool: it can enqueue jobs
+        vault=ctx["vault"],
+        connectors=ctx["connectors"],
     )
 
 
@@ -82,6 +95,17 @@ async def fire_routines(ctx: dict[str, Any]) -> int:
     )
 
 
+async def poll_connector_events(ctx: dict[str, Any]) -> int:
+    """Every minute: starts routines that wait for new email or messages."""
+    return await connector_events.poll(
+        ctx["session_factory"],
+        ctx["pubsub_redis"],
+        ctx["redis"],
+        ctx["settings"],
+        ctx["connectors"],
+    )
+
+
 async def cleanup_routine_runs(ctx: dict[str, Any]) -> int:
     """Every hour: keeps the last 20 runs of each routine."""
     return await routines.cleanup_runs(ctx["session_factory"])
@@ -92,6 +116,7 @@ class WorkerSettings:
     cron_jobs: ClassVar[list[Any]] = [
         cron(stop_idle, second=0),
         cron(fire_routines, second=5),
+        cron(poll_connector_events, second=35),
         cron(cleanup_routine_runs, minute=17, second=30),
     ]
     on_startup = startup
