@@ -36,6 +36,7 @@ def approval_out(approval: Approval) -> ApprovalOut:
         status=approval.status,
         created_at=approval.created_at,
         resolved_at=approval.resolved_at,
+        from_routine=approval.from_routine,
     )
 
 
@@ -83,7 +84,12 @@ async def _resolve(
     # The run goes back to the worker only if it is still waiting for this.
     requeued = await session.execute(
         update(Run)
-        .where(Run.id == approval.run_id, Run.user_id == user_id, Run.status == "waiting_approval")
+        .where(
+            Run.id == approval.run_id,
+            Run.user_id == user_id,
+            # `needs_review` is a routine run that drafted this and ended without waiting.
+            Run.status.in_(("waiting_approval", "needs_review")),
+        )
         .values(status="queued")
         .returning(Run.id)
     )

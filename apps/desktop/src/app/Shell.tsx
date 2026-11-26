@@ -12,7 +12,14 @@ import { resumeRun } from "@/features/computer/api";
 import { startRealtime } from "@/features/realtime/connection";
 import { useLiveStore } from "@/features/realtime/live";
 import { apiFetch, type Schemas } from "@/lib/api/client";
-import { authLogout, errorMessage, onOpenApprovals, setTrayBadge } from "@/lib/tauri";
+import { pauseAllRoutines } from "@/features/routines/api";
+import {
+  authLogout,
+  errorMessage,
+  onOpenApprovals,
+  onPauseAllRoutines,
+  setTrayBadge,
+} from "@/lib/tauri";
 
 /** The signed-in app: sidebar, chat and the details pane. */
 export function Shell() {
@@ -46,6 +53,26 @@ export function Shell() {
   useEffect(() => {
     void setTrayBadge(pendingCount).catch(() => undefined);
   }, [pendingCount]);
+
+  // The tray menu's "Pause all routines".
+  useEffect(() => {
+    let stop: (() => void) | undefined;
+    let cancelled = false;
+    void onPauseAllRoutines(() => {
+      void pauseAllRoutines()
+        .catch(() => undefined)
+        .then(() => queryClient.invalidateQueries({ queryKey: ["routines"] }));
+    })
+      .then((unlisten) => {
+        if (cancelled) unlisten();
+        else stop = unlisten;
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+      stop?.();
+    };
+  }, [queryClient]);
 
   // The tray menu, a notification, or Ctrl/Cmd+Shift+A opens the approvals.
   useEffect(() => {

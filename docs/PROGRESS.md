@@ -4,8 +4,8 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 6 (memory, skills, Primary Bot routing): built and verified on Linux. Waiting for your
-hands-on check in the desktop app on Windows (with phases 4 and 5) before phase 7 starts.
+Phase 7 (routines): built and verified on Linux. Phases 4 to 7 still wait for your hands-on
+check in the desktop app on Windows. Phase 8 (connectors and Vault) is next.
 
 ## Done
 
@@ -277,11 +277,67 @@ Verified on 2026-11-25 (Linux)
 - Not verified here: real Claude deciding by itself when to remember, draft a skill or hand
   off (the scripted model does it on trigger words), and the packaged app on Windows.
 
+### Phase 7: routines
+
+Backend
+
+- Migration `0008`: `routines`, a real foreign key for `runs.routine_id`,
+  `approvals.from_routine`.
+- Scheduler: the worker job `fire_routines` runs every minute, starts each routine whose
+  `next_run_at` has passed and works out the next time with `croniter` in the routine's
+  timezone. A Redis lock per routine and time, plus a guarded UPDATE, mean two workers
+  never fire the same one.
+- Triggers: cron, webhook (`POST /webhooks/routines/{id}/{secret}`: random 32-byte secret,
+  only its hash stored, constant-time compare, 10 calls a minute, the same 404 for a wrong
+  secret and an unknown routine) and `connector_event` (stored, fired in phase 8).
+- Each routine has its own hidden chat, so its runs never wait behind your chat or block it.
+- A risky action in a routine run becomes a pending approval marked `from_routine` and the
+  run ends `needs_review`. Approving it later finishes that run.
+- Limits: 50 routines per Bot, at most every 5 minutes, 300 routine runs per hour per user,
+  none while the daily token budget is used up, and a firing is skipped while the previous
+  run is still going. The hourly job `cleanup_routine_runs` keeps the last 20 runs each.
+- API: list / create per Bot, edit, delete, pause, resume, test, runs (with the reply and
+  tool steps), `POST /routines/preview` (next run times) and `POST /routines/pause-all`.
+- `routine.completed` event with `notify` and the skill's name. Create, pause, resume and
+  delete are in `audit_log`.
+- Ids made in the same millisecond now keep the order they were made in (messages and tool
+  steps are listed by id; a flaky pagination test showed they could swap).
+
+Desktop
+
+- Routines tab: list with schedule in words, next run and last result; Pause / Resume,
+  Run now, History (expandable, with tool steps), Delete.
+- New routine: skill, "Every day at", "Every weekday at", "Every hour", custom cron or
+  webhook, a preview in words with the next run times, notify toggle. A webhook routine
+  shows its address once.
+- Tray item "Pause all routines". A notification when a routine finishes, only if it has
+  notify on.
+
+Verified on 2026-11-26 (Linux)
+
+- Backend: 253 tests pass, including next-run maths across daylight saving (a skipped
+  hour is passed over, a repeated hour runs once), five workers at once firing a routine
+  once, the webhook secret check, the needs-review path and cleanup keeping 20.
+- Real API and worker, no desktop app running: a routine made due was started by the
+  worker's own minute tick, ran its skill, and was rescheduled for the next day at 09:00
+  Lagos time. `curl -X POST` to the webhook address fired its routine; a wrong secret got
+  404. A routine whose skill emails someone ended `needs_review` with a pending approval.
+- Not verified here: the tray item and the notification on Windows, and a routine left to
+  reach its time by itself overnight (I moved `next_run_at` instead of waiting).
+
 ## Next
 
-- Phase 7: routines (`prompts/phase-07-routines.md`).
+- Phase 8: connectors + Vault (`prompts/phase-08-connectors-vault.md`).
 
 ## Shortcuts taken (to revisit)
+
+- A webhook's request body is ignored: it is never shown to the Bot. Passing it on safely
+  (as untrusted data) can come later.
+- A routine cannot be set to run more often than every 5 minutes.
+- Editing a routine in the app means deleting and recreating it; the API has PATCH.
+- "Pause all routines" has no "resume all": resume them one by one.
+- A routine run that needs review keeps its place in the history until it is answered or
+  stopped; cleanup never deletes it.
 
 - `memories.embedding` (the optional vector column) is not created; add it when memory
   search is built.
@@ -419,3 +475,7 @@ Verified on 2026-11-25 (Linux)
 | 2026-11-25 | A drafted skill is a card in `messages.card`, saved by its own endpoint | The prompt asks for a Save click, not an approval row; the model cannot create a skill alone. |
 | 2026-11-25 | Bots and memory lines are shown to the model with 8-character ids | Short enough to copy reliably; resolved only among that user's own rows. |
 | 2026-11-25 | Only the Primary Bot is offered `handoff`, and the handler checks again | A handed-off task cannot be passed on in a loop. |
+| 2026-11-26 | Each routine runs in its own hidden chat (`chats.kind = routine`) | A routine must not wait behind the user's chat, block it, or interleave with it. |
+| 2026-11-26 | Approving a `needs_review` approval resumes that routine run | Otherwise the draft would be approved and then never sent. |
+| 2026-11-26 | A missed firing is skipped, not queued | A routine that overruns, or a server that was down, must not cause a burst of runs. |
+| 2026-11-26 | UUID v7 ids carry sub-millisecond time and never go backwards in a process | Rows are listed in id order; same-millisecond ids could swap. |

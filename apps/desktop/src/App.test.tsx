@@ -19,6 +19,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => ({
   notify: vi.fn(),
   setTrayBadge: vi.fn(),
   onOpenApprovals: vi.fn(),
+  onPauseAllRoutines: vi.fn(),
 }));
 
 // No real WebSocket in unit tests; ws.test.ts and live.test.ts cover that layer.
@@ -53,6 +54,7 @@ const mocked = vi.mocked(tauri);
 let emitAuthChanged: (signedIn: boolean) => void = () => {};
 let emitAuthError: (error: tauri.TauriError) => void = () => {};
 let emitOpenApprovals: () => void = () => {};
+let emitPauseAll: () => void = () => {};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -122,6 +124,7 @@ const APPROVAL = {
   status: "pending",
   created_at: "2026-01-01T00:00:00Z",
   resolved_at: null,
+  from_routine: false,
 };
 
 const SKILL = {
@@ -135,7 +138,22 @@ const SKILL = {
   created_at: "2026-01-01T00:00:00Z",
 };
 
+const ROUTINE = {
+  id: "r1",
+  bot_id: "bot-1",
+  skill_id: "s1",
+  skill_name: "Weekly Report",
+  skill_slug: "weekly-report",
+  trigger: { type: "cron", cron: "0 9 * * 1-5", timezone: "UTC" } as Record<string, string>,
+  notify: true,
+  paused: false,
+  next_run_at: "2026-01-02T09:00:00Z" as string | null,
+  last_run: null,
+  webhook_url: null as string | null,
+};
+
 function fakeApi(initial: {
+  routines?: (typeof ROUTINE)[];
   memory?: string[];
   skills?: (typeof SKILL)[];
   approvals?: (typeof APPROVAL)[];
@@ -155,6 +173,7 @@ function fakeApi(initial: {
   const bots = [...(initial.bots ?? [])];
   const approvals = [...(initial.approvals ?? [])];
   const skills = [...(initial.skills ?? [])];
+  const routines = (initial.routines ?? []).map((routine) => ({ ...routine }));
   const memory = (initial.memory ?? []).map((text, index) => ({
     id: `mem-${index + 1}`,
     bot_id: "bot-1",
@@ -173,6 +192,57 @@ function fakeApi(initial: {
       return json({ email: "sam@example.com", name: "Sam", daily_token_budget: 1 });
     }
     if (path === "/bots" && method === "GET") return json(bots);
+    if (path.endsWith("/routines") && method === "GET") return json(routines);
+    if (path === "/routines/preview") {
+      const cron = (body as { cron: string }).cron;
+      if (cron.split(" ").length !== 5) {
+        return json(
+          { error: { code: "invalid_schedule", message: "That schedule is not valid." } },
+          422,
+        );
+      }
+      return json({ next_runs: ["2026-01-02T09:00:00Z", "2026-01-03T09:00:00Z"] });
+    }
+    if (path === "/routines/pause-all") {
+      routines.forEach((routine) => Object.assign(routine, { paused: true, next_run_at: null }));
+      return json({ paused: routines.length });
+    }
+    if (path.endsWith("/routines") && method === "POST") {
+      const input = body as { trigger: Record<string, string> };
+      const webhook = input.trigger.type === "webhook";
+      const created = {
+        ...ROUTINE,
+        id: "r-new",
+        trigger: input.trigger,
+        webhook_url: webhook ? "http://api.test/api/v1/webhooks/routines/r-new/s3cret" : null,
+      };
+      routines.push({ ...created, webhook_url: null });
+      return json(created, 201);
+    }
+    if (path.startsWith("/routines/") && path.endsWith("/runs")) {
+      return json([
+        {
+          run_id: "run-9",
+          status: "completed",
+          source: "schedule",
+          created_at: "2026-01-01T09:00:00Z",
+          finished_at: "2026-01-01T09:00:05Z",
+          error: null,
+          reply: "Here is the weekly report.",
+          tool_calls: [TOOL_CALL],
+        },
+      ]);
+    }
+    if (path.startsWith("/routines/") && method === "POST") {
+      const [, , id, action] = path.split("/");
+      const routine = routines.find((item) => item.id === id);
+      if (routine && action !== "test") routine.paused = action === "pause";
+      return json(routine ?? {}, action === "test" ? 202 : 200);
+    }
+    if (path.startsWith("/routines/") && method === "DELETE") {
+      routines.splice(0, routines.length);
+      return new Response(null, { status: 204 });
+    }
     if (path.endsWith("/memory") && method === "GET") return json(memory);
     if (path.endsWith("/memory") && method === "POST") {
       const line = { ...memory[0], id: "mem-new", text: (body as { text: string }).text };
@@ -300,6 +370,10 @@ beforeEach(() => {
   mocked.setTrayBadge.mockResolvedValue();
   mocked.onOpenApprovals.mockImplementation(async (callback) => {
     emitOpenApprovals = callback;
+    return () => {};
+  });
+  mocked.onPauseAllRoutines.mockImplementation(async (callback) => {
+    emitPauseAll = callback;
     return () => {};
   });
 });
@@ -948,4 +1022,99 @@ test("a handoff note opens the other Bot's chat, which shows who passed the task
 
   expect(await screen.findByRole("heading", { name: /Research Bot/ })).toBeInTheDocument();
   expect(await screen.findByRole("button", { name: "Passed on by Inbox Bot" })).toBeInTheDocument();
+});
+
+// --- Routines ---------------------------------------------------------------------------
+
+test("the Routines tab lists routines and can pause, run and show history", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], skills: [SKILL], routines: [ROUTINE] });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openTab("Routines");
+  const list = await within(details).findByRole("list", { name: "Routines" });
+  expect(await within(list).findByText("Weekly Report")).toBeInTheDocument();
+  expect(within(list).getByText(/Every weekday at 09:00.* · Next:/)).toBeInTheDocument();
+  expect(within(list).getByText("Has not run yet")).toBeInTheDocument();
+
+  fireEvent.click(within(list).getByRole("button", { name: "Pause Weekly Report" }));
+  expect(
+    await within(list).findByRole("button", { name: "Resume Weekly Report" }),
+  ).toBeInTheDocument();
+  fireEvent.click(within(list).getByRole("button", { name: "Run Weekly Report now" }));
+  await waitFor(() =>
+    expect(calls.filter((call) => call.method === "POST").map((call) => call.path)).toEqual([
+      "/routines/r1/pause",
+      "/routines/r1/test",
+    ]),
+  );
+
+  fireEvent.click(within(list).getByRole("button", { name: "History of Weekly Report" }));
+  const history = await within(list).findByRole("list", { name: "History of Weekly Report" });
+  expect(within(history).getByText("Here is the weekly report.")).toBeInTheDocument();
+  expect(within(history).getByText("Opened example.com")).toBeInTheDocument();
+});
+
+test("a new routine previews its schedule, and a webhook routine shows its address once", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], skills: [SKILL] });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openTab("Routines");
+  fireEvent.click(within(details).getByRole("button", { name: "New routine" }));
+  let dialog = await screen.findByRole("dialog");
+
+  // Every weekday at 07:30: the preview says so in words and the routine is created.
+  fireEvent.change(within(dialog).getByLabelText("When"), { target: { value: "weekdays" } });
+  fireEvent.change(within(dialog).getByLabelText(/^Time/), { target: { value: "07:30" } });
+  expect(await within(dialog).findByText(/Every weekday at 07:30.*Next:/)).toBeInTheDocument();
+
+  // A custom schedule that is not valid cannot be saved.
+  fireEvent.change(within(dialog).getByLabelText("When"), { target: { value: "custom" } });
+  fireEvent.change(within(dialog).getByLabelText(/^Schedule/), { target: { value: "soon" } });
+  expect(await within(dialog).findByText("That schedule is not valid.")).toBeInTheDocument();
+  expect(within(dialog).getByRole("button", { name: "Create routine" })).toBeDisabled();
+
+  fireEvent.change(within(dialog).getByLabelText("When"), { target: { value: "weekdays" } });
+  const create = within(dialog).getByRole("button", { name: "Create routine" });
+  await waitFor(() => expect(create).toBeEnabled());
+  fireEvent.click(create);
+  await waitFor(() =>
+    expect(
+      calls.find((call) => call.path === "/bots/bot-1/routines" && call.method === "POST")?.body,
+    ).toEqual({
+      skill_id: "s1",
+      trigger: { type: "cron", cron: "30 7 * * 1-5", timezone: expect.any(String) as string },
+      notify: true,
+    }),
+  );
+  await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+
+  // A webhook routine: the secret address appears once.
+  fireEvent.click(within(details).getByRole("button", { name: "New routine" }));
+  dialog = await screen.findByRole("dialog");
+  fireEvent.change(within(dialog).getByLabelText("When"), { target: { value: "webhook" } });
+  fireEvent.click(within(dialog).getByRole("button", { name: "Create routine" }));
+  expect(
+    await within(details).findByText("http://api.test/api/v1/webhooks/routines/r-new/s3cret"),
+  ).toBeInTheDocument();
+  fireEvent.click(within(details).getByRole("button", { name: "Done" }));
+  expect(within(details).queryByText(/s3cret/)).not.toBeInTheDocument();
+});
+
+test("the tray's Pause all routines pauses them", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT], skills: [SKILL], routines: [{ ...ROUTINE }] });
+  render(<App />);
+  await screen.findByRole("log");
+  const details = await openTab("Routines");
+  await within(details).findByRole("button", { name: "Pause Weekly Report" });
+  await waitFor(() => expect(mocked.onPauseAllRoutines).toHaveBeenCalled());
+
+  act(() => emitPauseAll());
+
+  expect(
+    await within(details).findByRole("button", { name: "Resume Weekly Report" }),
+  ).toBeInTheDocument();
+  expect(calls.some((call) => call.path === "/routines/pause-all")).toBe(true);
 });

@@ -63,3 +63,9 @@ def test_mailer_choice() -> None:
     assert isinstance(create_mailer(_settings(smtp_url="smtp://u:p@localhost:2525")), SmtpMailer)
     with pytest.raises(RuntimeError, match="SMTP_URL"):
         create_mailer(_settings(crew_env="prod"))
+
+
+def test_uuid7_keeps_the_order_ids_were_made_in() -> None:
+    ids = [uuid7() for _ in range(5000)]  # many per millisecond
+    assert ids == sorted(ids) and len(set(ids)) == len(ids)
+    assert all(item.version == 7 and item.variant == uuid.RFC_4122 for item in ids)

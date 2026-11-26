@@ -35,7 +35,7 @@ from crew.computer.provider import ComputerProvider
 from crew.computer.service import RunComputer
 from crew.config import Settings
 from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
-from crew.models import Approval, Bot, Chat, Memory, Message, Run, Skill, ToolCall
+from crew.models import Approval, Bot, Chat, Memory, Message, Routine, Run, Skill, ToolCall
 from crew.schemas.chat import MessageOut
 from crew.schemas.run import ToolCallOut
 from crew.tools.handoff import NAME as HANDOFF
@@ -86,7 +86,7 @@ async def request_resume(redis: Redis, run_id: uuid.UUID) -> None:
 
 @dataclass
 class Outcome:
-    status: str  # completed | failed | cancelled | waiting_approval
+    status: str  # completed | failed | cancelled | waiting_approval | needs_review
     stop: BudgetStop | None = None
     error: LLMError | None = None
 
@@ -106,6 +106,11 @@ class _State:
     parts: list[str] = field(default_factory=list)
     length: int = 0
     need_separator: bool = False
+    routine_id: uuid.UUID | None = None
+    routine_notify: bool = False
+    routine_title: str = ""
+    # waiting_approval (someone is at the chat) or needs_review (a routine run).
+    parked_status: str = "waiting_approval"
     cancel_requested: bool = False
     last_saved: float = field(default_factory=time.monotonic)
 
@@ -132,6 +137,25 @@ class _State:
                 "bot_id": str(self.bot_id),
                 "status": status,
                 **extra,
+            },
+        )
+
+    async def publish_routine(self, status: str) -> None:
+        """Tells the app a routine run ended (or needs a look). The app decides to notify."""
+        if self.routine_id is None:
+            return
+        await events.publish(
+            self.redis,
+            events.user_channel(self.user_id),
+            "routine.completed",
+            {
+                "routine_id": str(self.routine_id),
+                "run_id": str(self.run_id),
+                "bot_id": str(self.bot_id),
+                "status": status,
+                # The app shows a notification only when the user asked for one.
+                "notify": self.routine_notify,
+                "title": self.routine_title,
             },
         )
 
@@ -249,8 +273,13 @@ async def _ask_for_approval(
     )
     session.add(approval)
     row.status = "waiting_approval"
+    # A routine run does not wait for anyone: it ends `needs_review` and the approval sits
+    # in the Approvals list. Approving it later continues the run.
+    parked = "needs_review" if run.routine_id is not None else "waiting_approval"
+    approval.from_routine = run.routine_id is not None
+    state.parked_status = parked
     # In the same commit, so the approve endpoint never sees a half-parked run.
-    run.status = "waiting_approval"
+    run.status = parked
     await session.execute(
         update(Message).where(Message.id == state.message_id).values(content=state.text)
     )
@@ -262,7 +291,8 @@ async def _ask_for_approval(
         run_id=str(state.run_id),
         tool_call=ToolCallOut.model_validate(row).model_dump(mode="json"),
     )
-    await state.publish_status("waiting_approval", message_id=str(state.message_id))
+    await state.publish_status(parked, message_id=str(state.message_id))
+    await state.publish_routine(parked)
     await events.publish(
         state.redis,
         events.user_channel(state.user_id),
@@ -498,7 +528,7 @@ async def _loop(
     # A run that was waiting for approval continues with the step it stopped in.
     unfinished = _unfinished_tool_uses(transcript)
     if unfinished and not await finish_step(max(run.steps - 1, 0), unfinished):
-        return Outcome("waiting_approval")
+        return Outcome(state.parked_status)
 
     for step in range(run.steps, settings.crew_max_steps):
         await _wait_while_paused(state, session, run)
@@ -532,7 +562,7 @@ async def _loop(
             return Outcome("completed")
 
         if not await finish_step(step, result.tool_uses):
-            return Outcome("waiting_approval")
+            return Outcome(state.parked_status)
 
     return Outcome("completed", stop=step_limit_stop(settings))
 
@@ -541,7 +571,7 @@ async def _finish(
     state: _State, session_factory: async_sessionmaker[AsyncSession], outcome: Outcome
 ) -> None:
     """Writes the final state with a fresh session, whatever happened to the loop's one."""
-    if outcome.status == "waiting_approval":
+    if outcome.status in ("waiting_approval", "needs_review"):
         # Already parked and announced in one commit by `_ask_for_approval`. The approve
         # endpoint may have queued the run again by now, so nothing is written here.
         return
@@ -593,6 +623,7 @@ async def _finish(
     if outcome.stop is not None:
         extra["stop"] = outcome.stop.code
     await state.publish_status(outcome.status, **extra)
+    await state.publish_routine(outcome.status)
     await state.redis.delete(cancel_key(state.run_id), pause_key(state.run_id))
 
 
@@ -674,11 +705,19 @@ async def run_agent(
         approval_mode=bot.approval_mode,
         redis=redis,
         settings=settings,
+        routine_id=run.routine_id,
+        parked_status="needs_review" if run.routine_id is not None else "waiting_approval",
     )
     if resumed and message.content:
         state.parts.append(message.content)
         state.length = len(message.content)
         state.need_separator = True
+    if run.routine_id is not None:
+        async with session_factory() as lookup:
+            routine = await lookup.get(Routine, run.routine_id)
+            skill = await lookup.get(Skill, run.skill_id) if run.skill_id else None
+        state.routine_notify = bool(routine and routine.notify)
+        state.routine_title = skill.name if skill is not None else "Routine"
     await state.publish_status("running")
     if not resumed:
         await state.publish_chat(

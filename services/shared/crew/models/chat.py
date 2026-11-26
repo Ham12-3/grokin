@@ -51,7 +51,7 @@ class Chat(Base, IdMixin, TimestampMixin):
     __table_args__ = (Index("ix_chats_user", "user_id"),)
 
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
-    kind: Mapped[str] = mapped_column(Text)  # direct | group
+    kind: Mapped[str] = mapped_column(Text)  # direct | group | routine
     title: Mapped[str | None] = mapped_column(Text)
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
@@ -75,7 +75,9 @@ class Run(Base, IdMixin, TimestampMixin):
     user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
     bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
     chat_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"))
-    routine_id: Mapped[uuid.UUID | None] = mapped_column()  # FK arrives with routines (phase 7)
+    routine_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("routines.id", ondelete="CASCADE")
+    )
     # queued | running | waiting_approval | paused | completed | failed | cancelled | needs_review
     status: Mapped[str] = mapped_column(Text)
     steps: Mapped[int] = mapped_column(Integer, server_default=text("0"))
@@ -152,6 +154,8 @@ class Approval(Base, IdMixin, TimestampMixin):
     status: Mapped[str] = mapped_column(Text, server_default=text("'pending'"))
     edited_args: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     reason: Mapped[str | None] = mapped_column(Text)  # why the user rejected it
+    # Drafted by a routine: nobody was waiting, the run ended `needs_review`.
+    from_routine: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
     resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Set when the worker runs the approved call: an approval is good for one execution.
     executed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -193,6 +197,28 @@ class Skill(Base, IdMixin, TimestampMixin):
     description: Mapped[str] = mapped_column(Text)
     steps: Mapped[str] = mapped_column(Text)  # markdown
     rules: Mapped[str] = mapped_column(Text, server_default=text("''"))
+
+
+class Routine(Base, IdMixin, TimestampMixin):
+    """A skill that runs by itself: on a schedule, from a webhook, or (later) on an event."""
+
+    __tablename__ = "routines"
+    __table_args__ = (
+        Index("ix_routines_due", "next_run_at", postgresql_where=text("NOT paused")),
+        Index("ix_routines_bot", "bot_id"),
+    )
+
+    bot_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("bots.id", ondelete="CASCADE"))
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    skill_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("skills.id", ondelete="CASCADE"))
+    # {type:"cron",cron,timezone} | {type:"webhook"} | {type:"connector_event",connector,event}
+    trigger: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    webhook_secret_hash: Mapped[str | None] = mapped_column(Text)
+    notify: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    paused: Mapped[bool] = mapped_column(Boolean, server_default=text("false"))
+    next_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Each routine has its own chat: its runs never wait behind (or block) the user's chat.
+    chat_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("chats.id", ondelete="SET NULL"))
 
 
 class Computer(Base, IdMixin, TimestampMixin):

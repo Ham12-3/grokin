@@ -319,6 +319,7 @@ const APPROVAL = {
   status: "pending",
   created_at: "2026-01-01T00:00:00Z",
   resolved_at: null,
+  from_routine: false,
 } as Approval;
 
 test("a new approval joins the list and asks for a notification; an answer removes it", () => {
@@ -371,4 +372,19 @@ test("when the Bot changes its memory, the Memory tab is refreshed", () => {
   expect(queryClient.getQueryState(["memory", BOT])?.isInvalidated).toBe(false);
   handleEvent(queryClient, { type: "tool.finished", chat_id: CHAT, tool_call: call });
   expect(queryClient.getQueryState(["memory", BOT])?.isInvalidated).toBe(true);
+});
+
+test("a finished routine refreshes its history and notifies only when asked to", () => {
+  const queryClient = seeded([]);
+  queryClient.setQueryData(["routines", BOT], []);
+  const done = { type: "routine.completed", routine_id: "r1", status: "completed", title: "Brief" };
+
+  handleEvent(queryClient, { ...done, notify: false });
+  expect(queryClient.getQueryState(["routines", BOT])?.isInvalidated).toBe(true);
+  expect(vi.mocked(tauri.notify)).not.toHaveBeenCalledWith("Routine finished", "Brief");
+
+  handleEvent(queryClient, { ...done, notify: true });
+  expect(vi.mocked(tauri.notify)).toHaveBeenCalledWith("Routine finished", "Brief");
+  handleEvent(queryClient, { ...done, notify: true, status: "needs_review" });
+  expect(vi.mocked(tauri.notify)).toHaveBeenCalledWith("Routine needs your approval", "Brief");
 });

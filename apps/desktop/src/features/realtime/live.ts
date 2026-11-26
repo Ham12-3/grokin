@@ -201,6 +201,20 @@ export function handleEvent(queryClient: QueryClient, event: ServerEvent): void 
     case "approval.resolved":
       removeApproval(queryClient, str(event.approval_id));
       break;
+    case "routine.completed": {
+      void queryClient.invalidateQueries({ queryKey: ["routines"] });
+      void queryClient.invalidateQueries({ queryKey: ["routine-runs"] });
+      if (event.notify === true) {
+        const outcome =
+          event.status === "needs_review"
+            ? "needs your approval"
+            : event.status === "completed"
+              ? "finished"
+              : "did not finish";
+        void notify(`Routine ${outcome}`, str(event.title) || "Routine").catch(() => undefined);
+      }
+      break;
+    }
     case "computer.status": {
       const computerStatus = str(event.status) as ComputerStatus;
       useLiveStore.setState({ computer: computerStatus });

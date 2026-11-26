@@ -65,7 +65,7 @@ async def cancel_run(
             )
             return "cancelled"
         await session.refresh(run)
-    if run.status == "waiting_approval":
+    if run.status in ("waiting_approval", "needs_review"):
         return await _cancel_waiting(session, redis, user_id, run)
     if run.status in ("running", "paused"):
         # A paused run is still alive in the worker, waiting: it can be stopped too.
@@ -78,7 +78,7 @@ async def _cancel_waiting(session: AsyncSession, redis: Redis, user_id: uuid.UUI
     now = datetime.now(UTC)
     claimed = await session.execute(
         update(Run)
-        .where(Run.id == run.id, Run.status == "waiting_approval")
+        .where(Run.id == run.id, Run.status.in_(("waiting_approval", "needs_review")))
         .values(status="cancelled", finished_at=now)
         .returning(Run.id)
     )

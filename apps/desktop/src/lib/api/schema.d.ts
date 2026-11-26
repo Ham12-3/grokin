@@ -529,6 +529,167 @@ export interface paths {
         patch: operations["update_skill_api_v1_skills__skill_id__patch"];
         trace?: never;
     };
+    "/api/v1/bots/{bot_id}/routines": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Routines */
+        get: operations["list_routines_api_v1_bots__bot_id__routines_get"];
+        put?: never;
+        /** Create Routine */
+        post: operations["create_routine_api_v1_bots__bot_id__routines_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routines/preview": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Preview
+         * @description The next three times a schedule would run, to show before saving.
+         */
+        post: operations["preview_api_v1_routines_preview_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routines/pause-all": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause All */
+        post: operations["pause_all_api_v1_routines_pause_all_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routines/{routine_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Routine */
+        delete: operations["delete_routine_api_v1_routines__routine_id__delete"];
+        options?: never;
+        head?: never;
+        /** Update Routine */
+        patch: operations["update_routine_api_v1_routines__routine_id__patch"];
+        trace?: never;
+    };
+    "/api/v1/routines/{routine_id}/pause": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Pause */
+        post: operations["pause_api_v1_routines__routine_id__pause_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routines/{routine_id}/resume": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Resume */
+        post: operations["resume_api_v1_routines__routine_id__resume_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routines/{routine_id}/test": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /** Test Run */
+        post: operations["test_run_api_v1_routines__routine_id__test_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/routines/{routine_id}/runs": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Runs */
+        get: operations["list_runs_api_v1_routines__routine_id__runs_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/webhooks/routines/{routine_id}/{secret}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Routine Webhook
+         * @description Starts the routine. The request body is ignored: it is never shown to the Bot.
+         */
+        post: operations["routine_webhook_api_v1_webhooks_routines__routine_id___secret__post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -574,6 +735,11 @@ export interface components {
             created_at: string;
             /** Resolved At */
             resolved_at: string | null;
+            /**
+             * From Routine
+             * @default false
+             */
+            from_routine: boolean;
         };
         /**
          * ApprovalPreview
@@ -720,6 +886,51 @@ export interface components {
             /** Last Active At */
             last_active_at: string | null;
         };
+        /**
+         * ConnectorEventTrigger
+         * @description Stored now, fired once connectors exist (phase 8).
+         */
+        ConnectorEventTrigger: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "connector_event";
+            /** Connector */
+            connector: string;
+            /** Event */
+            event: string;
+        };
+        /** CronPreview */
+        CronPreview: {
+            /** Next Runs */
+            next_runs: string[];
+        };
+        /** CronPreviewRequest */
+        CronPreviewRequest: {
+            /** Cron */
+            cron: string;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+        };
+        /** CronTrigger */
+        CronTrigger: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "cron";
+            /** Cron */
+            cron: string;
+            /**
+             * Timezone
+             * @default UTC
+             */
+            timezone: string;
+        };
         /** EmailStartRequest */
         EmailStartRequest: {
             /**
@@ -774,6 +985,24 @@ export interface components {
              * @enum {string}
              */
             redis: "ok" | "error";
+        };
+        /** LastRun */
+        LastRun: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "waiting_approval" | "paused" | "completed" | "failed" | "cancelled" | "needs_review";
+            /**
+             * At
+             * Format: date-time
+             */
+            at: string;
         };
         /** LogoutRequest */
         LogoutRequest: {
@@ -874,6 +1103,11 @@ export interface components {
             /** Tool Calls */
             tool_calls: components["schemas"]["ToolCallOut"][];
         };
+        /** PauseAllResponse */
+        PauseAllResponse: {
+            /** Paused */
+            paused: number;
+        };
         /** RefreshRequest */
         RefreshRequest: {
             /** Refresh Token */
@@ -883,6 +1117,94 @@ export interface components {
         RejectRequest: {
             /** Reason */
             reason?: string | null;
+        };
+        /** RoutineCreate */
+        RoutineCreate: {
+            /**
+             * Skill Id
+             * Format: uuid
+             */
+            skill_id: string;
+            /** Trigger */
+            trigger: components["schemas"]["CronTrigger"] | components["schemas"]["WebhookTrigger"] | components["schemas"]["ConnectorEventTrigger"];
+            /**
+             * Notify
+             * @default false
+             */
+            notify: boolean;
+        };
+        /** RoutineOut */
+        RoutineOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Bot Id
+             * Format: uuid
+             */
+            bot_id: string;
+            /**
+             * Skill Id
+             * Format: uuid
+             */
+            skill_id: string;
+            /** Skill Name */
+            skill_name: string;
+            /** Skill Slug */
+            skill_slug: string;
+            /** Trigger */
+            trigger: components["schemas"]["CronTrigger"] | components["schemas"]["WebhookTrigger"] | components["schemas"]["ConnectorEventTrigger"];
+            /** Notify */
+            notify: boolean;
+            /** Paused */
+            paused: boolean;
+            /** Next Run At */
+            next_run_at: string | null;
+            last_run: components["schemas"]["LastRun"] | null;
+            /** Webhook Url */
+            webhook_url?: string | null;
+        };
+        /**
+         * RoutineRunOut
+         * @description One past run of a routine, with what the Bot said and did.
+         */
+        RoutineRunOut: {
+            /**
+             * Run Id
+             * Format: uuid
+             */
+            run_id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "queued" | "running" | "waiting_approval" | "paused" | "completed" | "failed" | "cancelled" | "needs_review";
+            /** Source */
+            source: string;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /** Finished At */
+            finished_at: string | null;
+            /** Error */
+            error: string | null;
+            /** Reply */
+            reply: string;
+            /** Tool Calls */
+            tool_calls: components["schemas"]["ToolCallOut"][];
+        };
+        /** RoutineUpdate */
+        RoutineUpdate: {
+            /** Skill Id */
+            skill_id?: string | null;
+            /** Trigger */
+            trigger?: (components["schemas"]["CronTrigger"] | components["schemas"]["WebhookTrigger"] | components["schemas"]["ConnectorEventTrigger"]) | null;
+            /** Notify */
+            notify?: boolean | null;
         };
         /** RunOut */
         RunOut: {
@@ -1075,6 +1397,14 @@ export interface components {
             input?: unknown;
             /** Context */
             ctx?: Record<string, never>;
+        };
+        /** WebhookTrigger */
+        WebhookTrigger: {
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "webhook";
         };
     };
     responses: never;
@@ -2248,6 +2578,345 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SkillOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_routines_api_v1_bots__bot_id__routines_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    create_routine_api_v1_bots__bot_id__routines_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                bot_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutineCreate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            201: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    preview_api_v1_routines_preview_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["CronPreviewRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CronPreview"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_all_api_v1_routines_pause_all_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["PauseAllResponse"];
+                };
+            };
+        };
+    };
+    delete_routine_api_v1_routines__routine_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    update_routine_api_v1_routines__routine_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["RoutineUpdate"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    pause_api_v1_routines__routine_id__pause_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    resume_api_v1_routines__routine_id__resume_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineOut"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    test_run_api_v1_routines__routine_id__test_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_runs_api_v1_routines__routine_id__runs_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["RoutineRunOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    routine_webhook_api_v1_webhooks_routines__routine_id___secret__post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                routine_id: string;
+                secret: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            202: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CancelResponse"];
                 };
             };
             /** @description Validation Error */

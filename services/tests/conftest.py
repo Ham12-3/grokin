@@ -177,7 +177,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
             text(
                 "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
                 "messages, runs, tool_calls, usage_daily, computers, approvals, connector_log, memories, "
-                "skills "
+                "skills, routines "
                 "CASCADE"
             )
         )

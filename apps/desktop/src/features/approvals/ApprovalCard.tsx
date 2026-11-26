@@ -67,7 +67,9 @@ export function ApprovalCard({ approval, botName }: ApprovalCardProps) {
       className="border-border bg-muted/60 space-y-2 rounded-lg border px-3 py-2"
     >
       <header>
-        <p className="text-muted-foreground text-xs">{botName} needs your approval</p>
+        <p className="text-muted-foreground text-xs">
+          {botName} needs your approval{approval.from_routine ? " (from a routine)" : ""}
+        </p>
         <h3 className="text-sm font-medium break-words">{approval.title}</h3>
       </header>
       <Preview approval={approval} />

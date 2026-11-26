@@ -78,7 +78,8 @@ async def list_chats(session: AsyncSession, user_id: uuid.UUID) -> list[ChatOut]
     chats = (
         await session.scalars(
             select(Chat)
-            .where(Chat.user_id == user_id)
+            # Routine chats are internal: their runs show in the routine's history.
+            .where(Chat.user_id == user_id, Chat.kind.in_(("direct", "group")))
             .order_by(Chat.last_message_at.desc().nulls_last(), Chat.id.desc())
         )
     ).all()

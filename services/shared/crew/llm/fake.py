@@ -69,6 +69,14 @@ def _first_turn(request: str, system: str, tools: list[ToolDefinition], number: 
     running = RUN_SKILL.search(system)
     if running is not None:
         steps = system.split(running.group(0), 1)[1].strip()
+        address = EMAIL_PATTERN.search(steps)
+        if address is not None:
+            # A skill that sends email: draft it, so a routine shows the needs-review path.
+            draft = {"to": address.group(1), "subject": running.group(1), "body": steps[:500]}
+            return Turn(
+                _words(f"Running the skill **{running.group(1)}**. The email needs approval."),
+                [ToolUse(f"fake_{number}", "email_send", draft)],
+            )
         return Turn(_words(f"Running the skill **{running.group(1)}**.\n\n{steps}"))
     if SKILL_PATTERN.search(request):
         draft = {

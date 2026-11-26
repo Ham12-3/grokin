@@ -9,10 +9,14 @@ use tauri::{AppHandle, Emitter, Manager, Wry};
 
 const OPEN: &str = "open";
 const APPROVALS: &str = "approvals";
+const PAUSE_ROUTINES: &str = "pause_routines";
 const QUIT: &str = "quit";
 const TRAY_ID: &str = "main";
 /// Tells the window to show the Approvals screen.
 pub const OPEN_APPROVALS_EVENT: &str = "open:approvals";
+
+/// Tells the window to pause every routine (the window holds the session, not the tray).
+pub const PAUSE_ROUTINES_EVENT: &str = "routines:pause-all";
 
 /// Kept in app state so the count can change after the menu is built.
 pub struct TrayState {
@@ -87,8 +91,15 @@ pub fn set_badge(app: &AppHandle, count: u32) {
 pub fn create(app: &AppHandle) -> tauri::Result<()> {
     let open = MenuItem::with_id(app, OPEN, "Open Crew", true, None::<&str>)?;
     let approvals = MenuItem::with_id(app, APPROVALS, approvals_label(0), true, None::<&str>)?;
+    let pause = MenuItem::with_id(
+        app,
+        PAUSE_ROUTINES,
+        "Pause all routines",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, QUIT, "Quit", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open, &approvals, &quit])?;
+    let menu = Menu::with_items(app, &[&open, &approvals, &pause, &quit])?;
     app.manage(TrayState {
         approvals,
         open_approvals_on_focus: AtomicBool::new(false),
@@ -101,6 +112,9 @@ pub fn create(app: &AppHandle) -> tauri::Result<()> {
         .on_menu_event(|app, event| match event.id().as_ref() {
             OPEN => show_main_window(app),
             APPROVALS => open_approvals(app),
+            PAUSE_ROUTINES => {
+                let _ = app.emit(PAUSE_ROUTINES_EVENT, ());
+            }
             QUIT => app.exit(0),
             _ => {}
         })

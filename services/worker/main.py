@@ -16,6 +16,7 @@ from crew.config import get_settings
 from crew.db import create_engine, create_session_factory
 from crew.llm import LLMError, create_llm
 from crew.memory.service import compact_memory as compact_memory_impl
+from crew.routines import service as routines
 from crew.tools import default_registry
 
 log = structlog.get_logger(__name__)
@@ -74,9 +75,25 @@ async def stop_idle(ctx: dict[str, Any]) -> int:
     )
 
 
+async def fire_routines(ctx: dict[str, Any]) -> int:
+    """Every minute: starts the routines whose time has come."""
+    return await routines.fire_due(
+        ctx["session_factory"], ctx["pubsub_redis"], ctx["redis"], ctx["settings"]
+    )
+
+
+async def cleanup_routine_runs(ctx: dict[str, Any]) -> int:
+    """Every hour: keeps the last 20 runs of each routine."""
+    return await routines.cleanup_runs(ctx["session_factory"])
+
+
 class WorkerSettings:
     functions: ClassVar[list[Any]] = [run_agent, compact_memory]
-    cron_jobs: ClassVar[list[Any]] = [cron(stop_idle, second=0)]
+    cron_jobs: ClassVar[list[Any]] = [
+        cron(stop_idle, second=0),
+        cron(fire_routines, second=5),
+        cron(cleanup_routine_runs, minute=17, second=30),
+    ]
     on_startup = startup
     on_shutdown = shutdown
     redis_settings = RedisSettings.from_dsn(get_settings().redis_url)

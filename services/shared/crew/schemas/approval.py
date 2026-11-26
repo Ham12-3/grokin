@@ -29,6 +29,8 @@ class ApprovalOut(BaseModel):
     status: ApprovalStatus
     created_at: datetime
     resolved_at: datetime | None
+    # Drafted by a routine while nobody was there.
+    from_routine: bool = False
 
 
 class ApproveRequest(BaseModel):

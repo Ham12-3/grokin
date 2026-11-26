@@ -14,7 +14,17 @@ from redis.asyncio import Redis
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from api import ws
-from api.routers import approvals, auth, bots, chats, computer, runs, skills
+from api.routers import (
+    approvals,
+    auth,
+    bots,
+    chats,
+    computer,
+    routines,
+    runs,
+    skills,
+    webhooks,
+)
 from crew import __version__
 from crew.auth.mailer import create_mailer
 from crew.auth.tokens import require_jwt_secret
@@ -45,6 +55,8 @@ router.include_router(runs.router)
 router.include_router(computer.router)
 router.include_router(approvals.router)
 router.include_router(skills.router)
+router.include_router(routines.router)
+router.include_router(webhooks.router)
 router.include_router(ws.router)
 
 

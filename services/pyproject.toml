@@ -20,6 +20,8 @@ dependencies = [
     "pyjwt>=2.9",
     "jsonschema>=4.26.0",
     "docker>=7.2.0",
+    "croniter>=7.0.0",
+    "tzdata>=2026.6",
 ]
 
 [dependency-groups]
@@ -29,6 +31,7 @@ dev = [
     "ruff>=0.8",
     "mypy>=1.13",
     "types-jsonschema>=4.26.0.20261006",
+    "types-croniter>=6.2.4.20261122",
 ]
 
 [build-system]

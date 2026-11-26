@@ -88,3 +88,8 @@ export function setTrayBadge(count: number): Promise<void> {
 export function onOpenApprovals(callback: () => void): Promise<UnlistenFn> {
   return listen("open:approvals", () => callback());
 }
+
+/** The tray menu's "Pause all routines". */
+export function onPauseAllRoutines(callback: () => void): Promise<UnlistenFn> {
+  return listen("routines:pause-all", () => callback());
+}

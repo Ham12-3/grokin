@@ -4,14 +4,12 @@ import type { Bot } from "@/features/bots/api";
 import { ComputerStatus } from "@/features/computer/ComputerStatus";
 import { useSendMessage } from "@/features/chat/api";
 import { ScreenPanel } from "@/features/computer/ScreenPanel";
+import { RoutinesTab } from "@/features/routines/RoutinesTab";
 import { MemoryTab } from "@/features/memory/MemoryTab";
 import { SkillsTab } from "@/features/skills/SkillsTab";
 
 // Empty for now; each fills in with its phase.
-const LATER_TABS = [
-  { value: "routines", label: "Routines", text: "Skills on a schedule or trigger." },
-  { value: "apps", label: "Apps", text: "The apps this Bot may use." },
-];
+const LATER_TABS = [{ value: "apps", label: "Apps", text: "The apps this Bot may use." }];
 
 export type DetailsTab = "screen" | "memory" | "skills" | "routines" | "apps" | "settings";
 
@@ -48,6 +46,7 @@ export function DetailsPane({
           <TabsTrigger value="screen">Screen</TabsTrigger>
           <TabsTrigger value="memory">Memory</TabsTrigger>
           <TabsTrigger value="skills">Skills</TabsTrigger>
+          <TabsTrigger value="routines">Routines</TabsTrigger>
           {LATER_TABS.map((item) => (
             <TabsTrigger key={item.value} value={item.value}>
               {item.label}
@@ -77,6 +76,9 @@ export function DetailsPane({
               }
             />
           )}
+        </TabsContent>
+        <TabsContent value="routines">
+          {tab === "routines" && <RoutinesTab bot={bot} />}
         </TabsContent>
         {LATER_TABS.map((item) => (
           <TabsContent key={item.value} value={item.value}>
