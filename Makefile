@@ -3,7 +3,7 @@ COMPOSE := docker compose -f infra/docker-compose.yml
 
 .PHONY: up down migrate api worker desktop computer-image check check-services check-desktop check-rust check-slow
 
-up: ## Start Postgres, Redis and MinIO
+up: ## Start Postgres and Redis
 	$(COMPOSE) up -d --wait
 
 down: ## Stop them (data volumes are kept)

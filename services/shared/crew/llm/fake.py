@@ -168,7 +168,13 @@ def _demo_turn(
         notes = f"# Notes\n\nSource: {previous['input']['url']}\n\n{result[:1500]}\n"
         return Turn(
             ["Saving ", "notes."],
-            [ToolUse(f"fake_{call_number}", "files_write", {"path": "notes.md", "content": notes})],
+            [
+                ToolUse(
+                    f"fake_{call_number}",
+                    "files_write",
+                    {"path": "outputs/notes.md", "content": notes},
+                )
+            ],
         )
     if previous.get("name") == "memory_add":
         return Turn(["Noted. ", "You ", "can ", "see ", "it ", "in ", "my ", "Memory ", "tab."])
@@ -204,7 +210,40 @@ def _demo_turn(
         )
     if str(previous.get("name", "")).startswith("browser_"):
         return Turn(["Done. ", "The ", "page ", "is ", "open ", "on ", "my ", "screen."])
-    return Turn(["Done. ", "I ", "saved ", "what ", "I ", "found ", "to ", "`notes.md`."])
+    return Turn(
+        [
+            "Done. ",
+            "I ",
+            "saved ",
+            "what ",
+            "I ",
+            "found ",
+            "to ",
+            "`outputs/notes.md`. ",
+            "It ",
+            "is ",
+            "in ",
+            "your ",
+            "Library.",
+        ]
+    )
+
+
+PICKER_MARK = "You decide which teammate should answer"
+
+
+def _pick(prompt: str) -> str:
+    """Dev behaviour for the group picker: the Bot whose name or job fits the last line."""
+    team = re.findall(r"^- ([^:\n]+): (.*)$", prompt, re.MULTILINE)
+    last = prompt.split("<conversation>")[-1].strip().splitlines()[-2:]
+    asked = set(re.findall(r"[a-z]{4,}", " ".join(last).lower()))
+    if asked & {"thanks", "thank", "okay"}:
+        return "none"
+    for name, job in team:
+        known = set(re.findall(r"[a-z]{4,}", f"{name} {job}".lower())) - {"bots"}
+        if any(a[:6] == k[:6] for a in asked for k in known):
+            return str(name)
+    return str(team[0][0]) if team else "none"
 
 
 class FakeLLM:
@@ -243,7 +282,9 @@ class FakeLLM:
     ) -> LLMResult:
         call_number = len(self.calls)
         self.calls.append({"system": system, "messages": list(messages), "tools": tools})
-        if self.script is None:
+        if self.script is None and system.startswith(PICKER_MARK):
+            turn = Turn([_pick(str(messages[-1]["content"]))])
+        elif self.script is None:
             turn = _demo_turn(messages, call_number, system, tools)
         elif call_number < len(self.script):
             turn = self.script[call_number]

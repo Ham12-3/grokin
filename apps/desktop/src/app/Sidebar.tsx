@@ -1,4 +1,4 @@
-import { Inbox, LogOut, Plus, Settings, Star } from "lucide-react";
+import { FolderOpen, Inbox, LogOut, Plus, Settings, Star, Users } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -21,6 +21,12 @@ interface SidebarProps {
   onOpenApprovals: () => void;
   settingsOpen: boolean;
   onOpenSettings: () => void;
+  groups: { id: string; title: string | null }[];
+  selectedGroupId: string | null;
+  onSelectGroup: (chatId: string) => void;
+  onNewGroup: () => void;
+  libraryOpen: boolean;
+  onOpenLibrary: () => void;
   userLabel: string;
   onSelect: (botId: string) => void;
   onNewBot: () => void;
@@ -37,11 +43,19 @@ export function Sidebar({
   onOpenApprovals,
   settingsOpen,
   onOpenSettings,
+  groups,
+  selectedGroupId,
+  onSelectGroup,
+  onNewGroup,
+  libraryOpen,
+  onOpenLibrary,
   userLabel,
   onSelect,
   onNewBot,
   onSignOut,
 }: SidebarProps) {
+  // A Bot is highlighted only while its own chat is what is on screen.
+  const botSelected = !approvalsOpen && !settingsOpen && !libraryOpen && !selectedGroupId;
   return (
     <aside className="border-border bg-sidebar text-sidebar-foreground flex w-[260px] shrink-0 flex-col border-r">
       <div className="flex items-center justify-between px-4 py-3">
@@ -56,7 +70,7 @@ export function Sidebar({
           />
           <DropdownMenuContent align="end" className="w-44">
             <DropdownMenuItem onClick={onNewBot}>New Bot</DropdownMenuItem>
-            <DropdownMenuItem disabled>New group chat (later)</DropdownMenuItem>
+            <DropdownMenuItem onClick={onNewGroup}>New group chat</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
@@ -96,9 +110,7 @@ export function Sidebar({
             <li key={bot.id}>
               <button
                 type="button"
-                aria-current={
-                  bot.id === selectedId && !approvalsOpen && !settingsOpen ? "page" : undefined
-                }
+                aria-current={bot.id === selectedId && botSelected ? "page" : undefined}
                 onClick={() => onSelect(bot.id)}
                 className={cn(
                   "hover:bg-sidebar-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
@@ -118,7 +130,47 @@ export function Sidebar({
             </li>
           ))}
         </ul>
+        {groups.length > 0 && (
+          <>
+            <p className="text-muted-foreground px-2 pt-3 pb-1 text-xs font-medium tracking-wide uppercase">
+              Groups
+            </p>
+            <ul aria-label="Groups" className="space-y-0.5">
+              {groups.map((group) => (
+                <li key={group.id}>
+                  <button
+                    type="button"
+                    aria-current={group.id === selectedGroupId ? "page" : undefined}
+                    onClick={() => onSelectGroup(group.id)}
+                    className={cn(
+                      "hover:bg-sidebar-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+                      group.id === selectedGroupId && "bg-sidebar-accent font-medium",
+                    )}
+                  >
+                    <Users aria-hidden className="size-4 shrink-0" />
+                    <span className="min-w-0 flex-1 truncate">{group.title ?? "Group chat"}</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </>
+        )}
       </nav>
+
+      <div className="px-2 pb-1">
+        <button
+          type="button"
+          aria-current={libraryOpen ? "page" : undefined}
+          onClick={onOpenLibrary}
+          className={cn(
+            "hover:bg-sidebar-accent flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
+            libraryOpen && "bg-sidebar-accent font-medium",
+          )}
+        >
+          <FolderOpen aria-hidden className="size-4" />
+          Library
+        </button>
+      </div>
 
       <div className="border-border flex items-center gap-2 border-t px-3 py-2">
         <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">{userLabel}</span>

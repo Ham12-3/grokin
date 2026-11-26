@@ -189,17 +189,16 @@ async def test_empty_message_is_rejected(ctx: Ctx) -> None:
     assert resp.status_code == 422
 
 
-async def test_open_chat_returns_the_direct_chat_and_groups_are_not_ready(ctx: Ctx) -> None:
+async def test_open_chat_returns_the_direct_chat(ctx: Ctx) -> None:
     me = await sign_in(ctx, "a@example.com")
     first = await create_bot(ctx, me, "First")
-    second = await create_bot(ctx, me, "Second")
     one = await ctx.client.post(f"{API}/chats", headers=me, json={"bot_ids": [first["id"]]})
     assert one.status_code == 200 and one.json()["id"] == first["direct_chat_id"]
-    group = await ctx.client.post(
-        f"{API}/chats", headers=me, json={"bot_ids": [first["id"], second["id"]]}
+    # The same Bot twice is still its own chat, not a group.
+    twice = await ctx.client.post(
+        f"{API}/chats", headers=me, json={"bot_ids": [first["id"], first["id"]]}
     )
-    assert group.status_code == 400
-    assert group.json()["error"]["code"] == "groups_not_available"
+    assert twice.json()["id"] == first["direct_chat_id"]
 
 
 async def test_message_pagination_walks_backwards(ctx: Ctx) -> None:

@@ -215,6 +215,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/chats/{chat_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post?: never;
+        /** Delete Group */
+        delete: operations["delete_group_api_v1_chats__chat_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/api/v1/chats/{chat_id}/messages": {
         parameters: {
             query?: never;
@@ -815,6 +832,61 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/library": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Items */
+        get: operations["list_items_api_v1_library_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/{item_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Item */
+        get: operations["get_item_api_v1_library__item_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Item */
+        delete: operations["delete_item_api_v1_library__item_id__delete"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/library/{item_id}/content": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Content
+         * @description The file itself. No sign-in: the signature (made for its owner) is the key.
+         */
+        get: operations["content_api_v1_library__item_id__content_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -1182,6 +1254,88 @@ export interface components {
              */
             at: string;
         };
+        /** LibraryItemDetail */
+        LibraryItemDetail: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Bot Id */
+            bot_id: string | null;
+            /** Run Id */
+            run_id: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "file" | "page" | "result";
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "document" | "image" | "pdf" | "other";
+            /** Title */
+            title: string;
+            /** Path */
+            path: string | null;
+            /** Mime */
+            mime: string | null;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+            /** Download Url */
+            download_url: string;
+        };
+        /** LibraryItemOut */
+        LibraryItemOut: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /** Bot Id */
+            bot_id: string | null;
+            /** Run Id */
+            run_id: string | null;
+            /**
+             * Kind
+             * @enum {string}
+             */
+            kind: "file" | "page" | "result";
+            /**
+             * Category
+             * @enum {string}
+             */
+            category: "document" | "image" | "pdf" | "other";
+            /** Title */
+            title: string;
+            /** Path */
+            path: string | null;
+            /** Mime */
+            mime: string | null;
+            /** Size Bytes */
+            size_bytes: number | null;
+            /**
+             * Created At
+             * Format: date-time
+             */
+            created_at: string;
+            /**
+             * Updated At
+             * Format: date-time
+             */
+            updated_at: string;
+        };
         /** LogoutRequest */
         LogoutRequest: {
             /** Refresh Token */
@@ -1449,11 +1603,8 @@ export interface components {
         /** SendMessageResponse */
         SendMessageResponse: {
             message: components["schemas"]["MessageOut"];
-            /**
-             * Run Id
-             * Format: uuid
-             */
-            run_id: string;
+            /** Run Id */
+            run_id: string | null;
         };
         /** SkillCreate */
         SkillCreate: {
@@ -2099,6 +2250,35 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["ChatOut"];
                 };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_group_api_v1_chats__chat_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                chat_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
             /** @description Validation Error */
             422: {
@@ -3444,6 +3624,134 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["BotApps"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_items_api_v1_library_get: {
+        parameters: {
+            query?: {
+                q?: string | null;
+                bot_id?: string | null;
+                type?: ("file" | "page" | "result") | null;
+                category?: ("document" | "image" | "pdf" | "other") | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryItemOut"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_item_api_v1_library__item_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["LibraryItemDetail"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_item_api_v1_library__item_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            204: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    content_api_v1_library__item_id__content_get: {
+        parameters: {
+            query: {
+                expires: number;
+                sig: string;
+            };
+            header?: never;
+            path: {
+                item_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */

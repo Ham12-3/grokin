@@ -93,3 +93,11 @@ export function onOpenApprovals(callback: () => void): Promise<UnlistenFn> {
 export function onPauseAllRoutines(callback: () => void): Promise<UnlistenFn> {
   return listen("routines:pause-all", () => callback());
 }
+
+/**
+ * Asks where to save, then downloads the Library file there. Resolves false if the user
+ * cancelled. Only Library download addresses are accepted by the Rust side.
+ */
+export function saveFile(url: string, filename: string): Promise<boolean> {
+  return invoke("save_file", { url, filename });
+}

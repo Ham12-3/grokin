@@ -26,6 +26,8 @@ interface ChatViewProps {
   onGiveBack: (runId: string) => void;
   /** Opens another Bot's chat (from a handoff note). */
   onOpenBot: (botId: string) => void;
+  /** Opens a Library item (from a file card). */
+  onOpenLibrary: (itemId: string) => void;
 }
 
 export function ChatView({
@@ -37,6 +39,7 @@ export function ChatView({
   onOpenScreen,
   onGiveBack,
   onOpenBot,
+  onOpenLibrary,
 }: ChatViewProps) {
   const skills = useSkills(bot.id);
   const messages = useMessages(chatId);
@@ -135,6 +138,7 @@ export function ChatView({
           loadingOlder={messages.isFetchingNextPage}
           onLoadOlder={loadOlder}
           onOpenBot={onOpenBot}
+          onOpenLibrary={onOpenLibrary}
         />
       )}
 

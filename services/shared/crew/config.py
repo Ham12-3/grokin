@@ -44,6 +44,9 @@ class Settings(BaseSettings):
     # Database / Redis / storage
     database_url: str = "postgresql+asyncpg://crew:crew@localhost:5432/crew"
     redis_url: str = "redis://localhost:6379/0"
+    # Where Library files are kept: "local" (a folder on this server) or "s3".
+    library_storage: Literal["local", "s3"] = "local"
+    library_dir: str = "data/library"
     s3_endpoint: str = "http://localhost:9000"
     s3_bucket: str = "crew-library"
     s3_access_key: str = Field(default="", repr=False)

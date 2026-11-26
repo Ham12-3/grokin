@@ -4,6 +4,10 @@ import { DetailsPane, type DetailsTab } from "./DetailsPane";
 import { Sidebar } from "./Sidebar";
 import { Button } from "@/components/ui/button";
 import { ApprovalsScreen } from "@/features/approvals/ApprovalsScreen";
+import { GroupChatView } from "@/features/groups/GroupChatView";
+import { NewGroupDialog } from "@/features/groups/NewGroupDialog";
+import { useGroups } from "@/features/groups/api";
+import { LibraryScreen } from "@/features/library/LibraryScreen";
 import { SettingsScreen } from "@/features/settings/SettingsScreen";
 import { useApprovals } from "@/features/approvals/api";
 import { NewBotDialog } from "@/features/bots/NewBotDialog";
@@ -39,7 +43,12 @@ export function Shell() {
   // True while the user is in control of the screen (Take over).
   const [interactive, setInteractive] = useState(false);
   const [newBotOpen, setNewBotOpen] = useState(false);
-  const [screen, setScreen] = useState<"chat" | "approvals" | "settings">("chat");
+  const [screen, setScreen] = useState<"chat" | "approvals" | "settings" | "library">("chat");
+  const [groupId, setGroupId] = useState<string | null>(null);
+  const [newGroupOpen, setNewGroupOpen] = useState(false);
+  const [libraryItem, setLibraryItem] = useState<string | null>(null);
+  const groups = useGroups();
+  const group = groups.data?.find((chat) => chat.id === groupId) ?? null;
   const approvalsOpen = screen === "approvals";
   const setApprovalsOpen = (open: boolean) => setScreen(open ? "approvals" : "chat");
   const approvals = useApprovals();
@@ -107,8 +116,20 @@ export function Shell() {
   const isWorking = (bot: Bot) => liveWorking[bot.id] ?? bot.working;
   const activeRunId = selected?.direct_chat_id ? liveRuns[selected.direct_chat_id] : undefined;
 
+  function openLibrary(itemId: string | null) {
+    setLibraryItem(itemId);
+    setScreen("library");
+  }
+
+  function selectGroup(chatId: string) {
+    setScreen("chat");
+    setGroupId(chatId);
+    setInteractive(false);
+  }
+
   function select(botId: string | null) {
     setApprovalsOpen(false);
+    setGroupId(null);
     setSelectedId(botId);
     setInteractive(false); // control never carries over to another Bot's screen
   }
@@ -146,6 +167,12 @@ export function Shell() {
           onOpenApprovals={() => setApprovalsOpen(true)}
           settingsOpen={screen === "settings"}
           onOpenSettings={() => setScreen("settings")}
+          groups={groups.data ?? []}
+          selectedGroupId={screen === "chat" && group ? group.id : null}
+          onSelectGroup={selectGroup}
+          onNewGroup={() => setNewGroupOpen(true)}
+          libraryOpen={screen === "library"}
+          onOpenLibrary={() => openLibrary(null)}
           userLabel={me.data?.name ?? me.data?.email ?? ""}
           onSelect={select}
           onNewBot={() => setNewBotOpen(true)}
@@ -154,6 +181,19 @@ export function Shell() {
 
         {approvalsOpen && <ApprovalsScreen bots={list} onOpenBot={select} />}
         {screen === "settings" && <SettingsScreen />}
+        {screen === "library" && (
+          <LibraryScreen bots={list} selectedId={libraryItem} onSelect={setLibraryItem} />
+        )}
+        {screen === "chat" && group && (
+          <GroupChatView
+            key={group.id}
+            chat={group}
+            bots={list}
+            onOpenBot={select}
+            onOpenLibrary={openLibrary}
+            onDeleted={() => setGroupId(null)}
+          />
+        )}
         {screen === "chat" && bots.isPending && (
           <p className="text-muted-foreground flex-1 p-8 text-center text-sm">Loading...</p>
         )}
@@ -176,7 +216,7 @@ export function Shell() {
             <Button onClick={() => setNewBotOpen(true)}>New Bot</Button>
           </div>
         )}
-        {screen === "chat" && selected?.direct_chat_id && (
+        {screen === "chat" && !group && selected?.direct_chat_id && (
           <ChatView
             key={selected.direct_chat_id}
             bot={selected}
@@ -189,9 +229,10 @@ export function Shell() {
             onOpenScreen={openScreen}
             onGiveBack={(runId) => void giveBack(runId)}
             onOpenBot={select}
+            onOpenLibrary={openLibrary}
           />
         )}
-        {screen === "chat" && selected && detailsOpen && (
+        {screen === "chat" && !group && selected && detailsOpen && (
           <DetailsPane
             key={selected.id}
             bot={selected}
@@ -208,6 +249,16 @@ export function Shell() {
       </div>
 
       <NewBotDialog open={newBotOpen} onOpenChange={setNewBotOpen} onCreated={select} />
+      {newGroupOpen && (
+        <NewGroupDialog
+          bots={list}
+          onClose={() => setNewGroupOpen(false)}
+          onCreated={(chatId) => {
+            setNewGroupOpen(false);
+            selectGroup(chatId);
+          }}
+        />
+      )}
     </div>
   );
 }

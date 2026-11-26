@@ -21,6 +21,12 @@ interface MessageListProps {
   onLoadOlder: () => void;
   /** Opens another Bot's chat (from a handoff note). */
   onOpenBot: (botId: string) => void;
+  /** Opens a Library item (from a file card). */
+  onOpenLibrary: (itemId: string) => void;
+  /** Group chats: the member Bots, so each reply shows who said it. */
+  bots?: Bot[];
+  /** What the chat is called for screen readers (a group's title). */
+  label?: string;
 }
 
 interface BubbleProps {
@@ -28,15 +34,18 @@ interface BubbleProps {
   message: Message;
   steps: ToolCall[];
   onOpenBot: (botId: string) => void;
+  onOpenLibrary: (itemId: string) => void;
+  /** True in a group: the Bot's name is shown above what it says. */
+  named: boolean;
 }
 
-function Bubble({ bot, message, steps, onOpenBot }: BubbleProps) {
+function Bubble({ bot, message, steps, onOpenBot, onOpenLibrary, named }: BubbleProps) {
   const live = useLiveStore((state) => state.streaming[message.id]);
   const streaming = live !== undefined;
   const text = live ?? message.content;
 
   if (message.role === "system") {
-    return <SystemMessage message={message} onOpenBot={onOpenBot} />;
+    return <SystemMessage message={message} onOpenBot={onOpenBot} onOpenLibrary={onOpenLibrary} />;
   }
   if (message.role === "user") {
     // A task another Bot passed on, not something the user typed here.
@@ -64,6 +73,7 @@ function Bubble({ bot, message, steps, onOpenBot }: BubbleProps) {
         {bot.avatar ?? "🤖"}
       </span>
       <div className="bg-muted max-w-[75%] space-y-2 rounded-2xl px-3 py-2" aria-busy={streaming}>
+        {named && <p className="text-muted-foreground text-xs font-medium">{bot.name}</p>}
         {steps.length > 0 && <ToolSteps steps={steps} />}
         {text && <Markdown text={text} />}
         {streaming && (
@@ -89,6 +99,9 @@ export function MessageList({
   loadingOlder,
   onLoadOlder,
   onOpenBot,
+  onOpenLibrary,
+  bots,
+  label,
 }: MessageListProps) {
   const scroller = useRef<HTMLDivElement>(null);
   const topSentinel = useRef<HTMLDivElement>(null);
@@ -154,7 +167,7 @@ export function MessageList({
       onScroll={onScroll}
       className="flex-1 space-y-3 overflow-y-auto p-4"
       role="log"
-      aria-label={`Chat with ${bot.name}`}
+      aria-label={label ?? `Chat with ${bot.name}`}
     >
       <div ref={topSentinel} />
       {hasOlder && (
@@ -166,13 +179,15 @@ export function MessageList({
       )}
       {messages.length === 0 && !hasOlder && (
         <p className="text-muted-foreground pt-16 text-center text-sm">
-          Say hello to {bot.name}. {bot.job}
+          {bots ? "Say hello, or mention a Bot with @." : `Say hello to ${bot.name}. ${bot.job}`}
         </p>
       )}
       {messages.map((message) => (
         <Bubble
           key={message.id}
-          bot={bot}
+          bot={bots?.find((member) => member.id === message.bot_id) ?? bot}
+          named={bots !== undefined}
+          onOpenLibrary={onOpenLibrary}
           message={message}
           steps={(message.run_id && toolCalls[message.run_id]) || NO_STEPS}
           onOpenBot={onOpenBot}

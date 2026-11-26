@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { ArrowRight } from "lucide-react";
+import { ArrowRight, FileText } from "lucide-react";
 import { useState } from "react";
 import { upsertMessage, type Message } from "./api";
 import { Button } from "@/components/ui/button";
@@ -84,12 +84,31 @@ function SkillDraftCard({ message }: { message: Message }) {
 interface SystemMessageProps {
   message: Message;
   onOpenBot: (botId: string) => void;
+  onOpenLibrary: (itemId: string) => void;
 }
 
 /** Cards and notes in the chat that are not something a person or a Bot said. */
-export function SystemMessage({ message, onOpenBot }: SystemMessageProps) {
+export function SystemMessage({ message, onOpenBot, onOpenLibrary }: SystemMessageProps) {
   const card = message.card ?? {};
   if (card.type === "skill_draft") return <SkillDraftCard message={message} />;
+  if (card.type === "file") {
+    return (
+      <div className="flex justify-center">
+        <button
+          type="button"
+          aria-label={`Open ${str(card.title)} in the Library`}
+          className="border-border hover:bg-muted flex max-w-[75%] items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm"
+          onClick={() => onOpenLibrary(str(card.library_id))}
+        >
+          <FileText aria-hidden className="size-4 shrink-0" />
+          <span className="min-w-0">
+            <span className="block truncate font-medium">{str(card.title)}</span>
+            <span className="text-muted-foreground block text-xs">In your Library</span>
+          </span>
+        </button>
+      </div>
+    );
+  }
   if (card.type === "handoff") {
     return (
       <div className="flex justify-center">

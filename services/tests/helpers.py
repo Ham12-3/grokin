@@ -109,8 +109,10 @@ class StubComputer:
         self.page_text = ""
         self._user_id = user_id
         self.displays_taken = 0
+        self.started = False
 
     async def handle(self) -> ComputerHandle:
+        self.started = True
         return await self.provider.ensure(self._user_id)
 
     async def display(self) -> int:
@@ -228,6 +230,7 @@ async def run_worker(
             vault=ctx.app.state.vault,
             connectors=ctx.app.state.connectors,
             mcp_opener=ctx.app.state.mcp_opener,
+            storage=ctx.app.state.storage,
         )
 
 

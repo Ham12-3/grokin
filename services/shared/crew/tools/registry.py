@@ -44,6 +44,11 @@ class ComputerAccess(Protocol):
     page_url: str
     page_text: str
 
+    @property
+    def started(self) -> bool:
+        """True once this run has used the computer."""
+        ...
+
     async def handle(self) -> ComputerHandle: ...
 
     async def display(self) -> int: ...
@@ -72,6 +77,8 @@ class ToolContext:
     connectors: Any = None
     # Tests only: opens MCP clients without a network.
     mcp_opener: Any = None
+    # Keeps Library files (`crew.library.storage.Storage`).
+    storage: Any = None
 
 
 @dataclass(frozen=True)

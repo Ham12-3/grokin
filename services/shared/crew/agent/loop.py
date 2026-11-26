@@ -31,16 +31,29 @@ from crew.agent.prompts import build_system_prompt
 from crew.approvals import gate, policy
 from crew.approvals.service import approval_out
 from crew.budget import BudgetStop, check_budget, step_limit_stop
+from crew.chats import groups
 from crew.computer.provider import ComputerProvider
 from crew.computer.service import RunComputer
 from crew.config import Settings
 from crew.connectors import service as connector_service
 from crew.llm.base import LLM, LLMError, MessageDict, ToolUse
-from crew.models import Approval, Bot, Chat, Memory, Message, Routine, Run, Skill, ToolCall
+from crew.models import (
+    Approval,
+    Bot,
+    Chat,
+    ChatMember,
+    Memory,
+    Message,
+    Routine,
+    Run,
+    Skill,
+    ToolCall,
+)
 from crew.schemas.chat import MessageOut
 from crew.schemas.run import ToolCallOut
 from crew.tools.connectors import registry_for_bot
 from crew.tools.handoff import NAME as HANDOFF
+from crew.tools.library import collect_outputs, run_paths
 from crew.tools.registry import (
     Tool,
     ToolContext,
@@ -61,6 +74,7 @@ REJECTED = (
     "The user rejected this action, so it was not done. Do not try it again or find another "
     "way to do it unless they ask. Tell them it was not done."
 )
+GROUP_APPROVAL_NOTE = "I need your approval for this. Check your Approvals."
 NOT_APPROVED = "This action needs the user's approval and does not have it. It was not done."
 INTERRUPTED = "This step was interrupted before it finished. It may not have happened."
 
@@ -110,6 +124,10 @@ class _State:
     length: int = 0
     need_separator: bool = False
     routine_id: uuid.UUID | None = None
+    # A group chat: approvals go to the Bot's own chat, and other Bots may answer next.
+    group: bool = False
+    direct_chat_id: uuid.UUID | None = None
+    job_queue: Any = None
     routine_notify: bool = False
     routine_title: str = ""
     # waiting_approval (someone is at the chat) or needs_review (a routine run).
@@ -174,9 +192,19 @@ class _State:
 
 
 async def _history(
-    session: AsyncSession, settings: Settings, chat_id: uuid.UUID, skip: uuid.UUID
+    session: AsyncSession,
+    settings: Settings,
+    chat_id: uuid.UUID,
+    skip: uuid.UUID,
+    *,
+    me: uuid.UUID | None = None,
+    names: dict[uuid.UUID, str] | None = None,
 ) -> list[MessageDict]:
-    """Earlier messages as alternating user/assistant text turns, starting with a user turn."""
+    """Earlier messages as alternating user/assistant text turns, starting with a user turn.
+
+    In a group (`names` given) only this Bot's own messages are its turns: what the other
+    Bots said is shown to it with their name in front, on the user's side.
+    """
     rows = (
         await session.scalars(
             select(Message)
@@ -194,11 +222,15 @@ async def _history(
         if not message.content.strip():
             continue
         role = "user" if message.role == "user" else "assistant"
+        content = message.content
+        if names is not None and message.role == "bot" and message.bot_id != me:
+            speaker = names.get(message.bot_id, "Another Bot") if message.bot_id else "Another Bot"
+            role, content = "user", f"{speaker}: {content}"
         if turns and turns[-1]["role"] == role:
             # The API wants alternating roles: merge neighbours (for example after a failed run).
-            turns[-1] = {"role": role, "content": f"{turns[-1]['content']}\n\n{message.content}"}
+            turns[-1] = {"role": role, "content": f"{turns[-1]['content']}\n\n{content}"}
         else:
-            turns.append({"role": role, "content": message.content})
+            turns.append({"role": role, "content": content})
     while turns and turns[0]["role"] != "user":
         turns.pop(0)
     return turns
@@ -264,12 +296,19 @@ async def _ask_for_approval(
 ) -> None:
     """Creates the approval, parks the run and tells the user. Nothing has run."""
     preview = preview_for(tool, dict(row.args), ctx)
+    card_chat = state.chat_id
+    if state.group:
+        # Never show an approval (or a Vault request) in a group: say where it is instead.
+        card_chat = state.direct_chat_id or state.chat_id
+        if state.length:
+            await state.emit("\n\n")
+        await state.emit(GROUP_APPROVAL_NOTE)
     approval = Approval(
         user_id=state.user_id,
         run_id=state.run_id,
         tool_call_id=row.id,
         bot_id=state.bot_id,
-        chat_id=state.chat_id,
+        chat_id=card_chat,
         tool=row.tool,
         title=preview.title[:300],
         preview={"kind": preview.kind, "fields": preview.fields, "context": preview.context},
@@ -508,8 +547,16 @@ async def _loop(
         for definition in registry.definitions(bot.enabled_tools)
         if definition["name"] != HANDOFF or other_bots
     ]
+    names: dict[uuid.UUID, str] | None = None
+    if state.group:
+        team = await groups.members(session, state.chat_id)
+        names = {member.id: member.name for member in team}
+        system = f"{system}\n\n{groups.group_prompt(bot, team)}"
     transcript: list[MessageDict] = list(run.transcript)
-    messages = await _history(session, settings, state.chat_id, state.message_id) + transcript
+    history = await _history(
+        session, settings, state.chat_id, state.message_id, me=bot.id, names=names
+    )
+    messages = history + transcript
     if not messages:
         raise LLMError("empty_chat", "There is no message to reply to.")
 
@@ -637,6 +684,11 @@ async def _finish(
         extra["stop"] = outcome.stop.code
     await state.publish_status(outcome.status, **extra)
     await state.publish_routine(outcome.status)
+    if state.group and outcome.status == "completed":
+        # The next Bot in line, or one this Bot asked by name, answers now.
+        await groups.after_turn(
+            session_factory, state.redis, state.job_queue, state.run_id, state.text
+        )
     await state.redis.delete(cancel_key(state.run_id), pause_key(state.run_id))
 
 
@@ -673,6 +725,7 @@ async def run_agent(
     vault: Any = None,
     connectors: Any = None,
     mcp_opener: Any = None,
+    storage: Any = None,
 ) -> str:
     """Runs one queued run to its end. Returns the final status.
 
@@ -712,6 +765,20 @@ async def run_agent(
         await session.close()
         raise
 
+    async with session_factory() as lookup:
+        chat = await lookup.get(Chat, run.chat_id)
+        group = chat is not None and chat.kind == "group"
+        direct_chat_id = (
+            await lookup.scalar(
+                select(Chat.id)
+                .join(ChatMember, ChatMember.chat_id == Chat.id)
+                .where(
+                    Chat.user_id == run.user_id, Chat.kind == "direct", ChatMember.bot_id == bot.id
+                )
+            )
+            if group
+            else None
+        )
     state = _State(
         run_id=run.id,
         chat_id=run.chat_id,
@@ -721,6 +788,9 @@ async def run_agent(
         approval_mode=bot.approval_mode,
         redis=redis,
         settings=settings,
+        group=group,
+        direct_chat_id=direct_chat_id,
+        job_queue=queue,
         routine_id=run.routine_id,
         parked_status="needs_review" if run.routine_id is not None else "waiting_approval",
     )
@@ -766,6 +836,7 @@ async def run_agent(
         vault=vault,
         connectors=connectors,
         mcp_opener=mcp_opener,
+        storage=storage,
     )
     try:
         if llm_error is not None or llm is None:
@@ -782,6 +853,16 @@ async def run_agent(
     except Exception as error:  # the run must always end in a final status
         log.exception("run.crashed", run_id=str(run_id), error=type(error).__name__)
         outcome = Outcome("failed", error=LLMError("run_failed", GENERIC_ERROR))
+    if outcome.status == "completed" and computer.started:
+        # Files the Bot left in /workspace/outputs go to the Library, with a card in the chat.
+        with contextlib.suppress(Exception):
+            async with session_factory() as lookup:
+                calls = (
+                    await lookup.execute(
+                        select(ToolCall.tool, ToolCall.args).where(ToolCall.run_id == run.id)
+                    )
+                ).all()
+            await collect_outputs(ctx, run_paths([(tool, args) for tool, args in calls]))
     watcher.cancel()
     inject.forget_active()
 

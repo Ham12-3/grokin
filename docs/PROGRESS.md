@@ -4,9 +4,9 @@ Claude Code updates this file at the end of every phase.
 
 ## Current phase
 
-Phase 8 (connectors and Vault): built and verified on Linux with a stand-in app service.
-The real Composio service has not been tried (no key). Phases 4 to 8 still wait for your
-hands-on check in the desktop app on Windows. Phase 9 (group chats and Library) is next.
+Phase 9 (group chats and Library): built and verified on Linux. Phases 4 to 9 still wait
+for your hands-on check in the desktop app on Windows. Phase 10 (installers and release) is
+next.
 
 ## Done
 
@@ -378,11 +378,69 @@ Verified on 2026-11-26 (Linux)
 - Not verified: Composio itself (connecting a real Gmail account, real sends), AWS KMS, and
   the packaged app on Windows.
 
+### Phase 9: group chats and Library
+
+Group chats
+
+- `POST /chats` with 2 to 6 Bot ids creates a group; `DELETE /chats/{id}` removes one.
+- `@Name` routes to those Bots in the order written (full name, name without spaces, or
+  first word). Without a mention the worker job `pick_responder` makes one small-model
+  call that chooses one Bot or nobody.
+- A Bot can `@mention` another Bot, which answers next. At most 6 Bot turns per user
+  message, then a note says the Bots stopped.
+- In a group each Bot sees the others' messages with their name in front, and its prompt
+  lists the other members.
+- An approval (or a Vault request) raised in a group goes to that Bot's own chat; the group
+  only gets "I need your approval for this. Check your Approvals."
+- Migration `0010`: `runs.turn`, `runs.queue`, `library_items`.
+
+Library
+
+- Tool `library_add(path, title)`. Files left in `/workspace/outputs` are also added when a
+  run ends (the Bot's own `screenshots` folder is skipped). The same path updates its item.
+- A copy is kept in storage: a folder on the server by default (`LIBRARY_STORAGE=local`),
+  or S3 (`LIBRARY_STORAGE=s3`, needs the `aws` extra). MinIO is gone from the dev setup.
+- `GET /library` (search, Bot, type and category filters), `GET /library/{id}` with a
+  download address signed for 5 minutes, `DELETE /library/{id}`. Downloads are sent as
+  plain text or with `nosniff` and a sandbox policy, so a file can never run as a page.
+- File cards in the chat open the item in the Library.
+
+Desktop
+
+- Sidebar: Groups, "New group chat" in the + menu, Library.
+- Group chat view with the speaker's name on each reply and an `@` picker in the composer.
+- Library screen: grid or list, search, filters by Bot and type, preview panel (markdown,
+  text, images, PDF), Save to computer, Remove.
+- Rust `save_file` command with the system save dialog (`tauri-plugin-dialog`, save-only
+  permission). It accepts only Library download addresses on Crew's own API.
+
+Verified on 2026-11-26 (Linux)
+
+- Backend: 298 tests pass (mention routing and order, picker choosing one or none, the
+  6-turn cap, approvals redirected out of a group, Library pickup, search, signed links
+  that expire and cannot be forged, cross-user checks).
+- Real API and worker with the real frontend in a browser: in a group of 3 Bots,
+  `@Research` was answered by Research Bot alone and an unaddressed question got one
+  answer. A file a Bot wrote showed as a card, opened in the Library, previewed as markdown,
+  and Save to computer was called with the right file.
+- Not verified: the real save dialog and file write on Windows (the Rust code compiles and
+  its checks are unit-tested), PDF preview inside the Tauri window, S3 storage, and real
+  Claude deciding who to mention.
+
 ## Next
 
-- Phase 9: group chats + Library (`prompts/phase-09-groups-library.md`).
+- Phase 10: installers + release (`prompts/phase-10-release.md`).
 
 ## Shortcuts taken (to revisit)
+
+- Group chats have no details pane, no `/` skills and no attachments.
+- While a group's Bots take turns the chat is busy; you can press Stop.
+- Library storage on S3 is written but never run against a real bucket. With local storage
+  the API and the worker must share the same folder (one server, or a shared disk).
+- Only files are added to the Library. The data model's `page` and `result` kinds are not
+  produced yet.
+- The PDF preview relies on the webview showing a PDF inside a frame; if it does not on
+  some system, Save to computer still works.
 
 - Composio is written from its published API and never run against a real account. The
   Notion update and the new-email polling are the least certain parts.
@@ -485,9 +543,6 @@ Verified on 2026-11-26 (Linux)
 - A run whose worker dies stays `running` until `RUN_TIMEOUT_SECONDS` (10 minutes); the chat
   is blocked for that long.
 
-- MinIO: `minio/minio` can no longer be pulled from Docker Hub (or quay.io), so the template's
-  compose file made `make up` fail. MinIO is now behind the `storage` profile. Pick an object
-  store before phase 9 (Library).
 - CI has not run yet: the repo has no GitHub remote.
 - Linux keychain support (`sync-secret-service`) is compiled in but untested; CI will need
   `libdbus-1-dev`.
@@ -549,3 +604,7 @@ Verified on 2026-11-26 (Linux)
 | 2026-11-26 | App tools are built per Bot, not registered globally | A Bot without an app must not have its tools at all, even if it asks for one by name. |
 | 2026-11-26 | A development stand-in replaces Composio when no key is set | Every flow can be built and tested without an account; it sends nothing. |
 | 2026-11-26 | MCP headers are a Vault item holding JSON | Keeps secrets out of `connectors`; one item can hold several headers. |
+| 2026-11-26 | Library files are stored in a server folder by default, S3 optional | The MinIO image cannot be pulled any more; a folder needs nothing extra in development. |
+| 2026-11-26 | Download links are signed by the API itself (HMAC, 5 minutes) | Works the same for local and S3 storage, and the app can preview without sending its token to a file URL. |
+| 2026-11-26 | The Bot's `outputs/screenshots` folder is not auto-added to the Library | Screenshots are working material; the Library would fill with them. |
+| 2026-11-26 | Saving a file is a Rust command, not file-system access for the window | The window can only ask to save a Library file; it cannot write anywhere itself. |

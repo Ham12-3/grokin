@@ -20,6 +20,7 @@ vi.mock("@/lib/tauri", async (importOriginal) => ({
   setTrayBadge: vi.fn(),
   onOpenApprovals: vi.fn(),
   onPauseAllRoutines: vi.fn(),
+  saveFile: vi.fn(),
 }));
 
 // No real WebSocket in unit tests; ws.test.ts and live.test.ts cover that layer.
@@ -172,7 +173,23 @@ const MCP = {
   ],
 };
 
+const LIBRARY_ITEM = {
+  id: "lib-1",
+  bot_id: "bot-1",
+  run_id: null,
+  kind: "file",
+  category: "document",
+  title: "Q3 report",
+  path: "/workspace/outputs/q3.md",
+  mime: "text/markdown",
+  size_bytes: 2048,
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+};
+
 function fakeApi(initial: {
+  library?: (typeof LIBRARY_ITEM)[];
+  groups?: { id: string; title: string; bot_ids: string[] }[];
   connectors?: (typeof MCP)[];
   botApps?: string[];
   vault?: string[];
@@ -196,6 +213,12 @@ function fakeApi(initial: {
   const bots = [...(initial.bots ?? [])];
   const approvals = [...(initial.approvals ?? [])];
   const skills = [...(initial.skills ?? [])];
+  const library = [...(initial.library ?? [])];
+  const groups = (initial.groups ?? []).map((group) => ({
+    ...group,
+    kind: "group",
+    last_message_at: null,
+  }));
   const connectors = (initial.connectors ?? []).map((item) => ({ ...item }));
   let botApps = [...(initial.botApps ?? [])];
   const vault = (initial.vault ?? []).map((name, index) => ({
@@ -223,6 +246,41 @@ function fakeApi(initial: {
       return json({ email: "sam@example.com", name: "Sam", daily_token_budget: 1 });
     }
     if (path === "/bots" && method === "GET") return json(bots);
+    if (String(input).startsWith("http://api.test/files/")) {
+      return new Response("# Q3 report\n\nRevenue is **up**.", { status: 200 });
+    }
+    if (path === "/chats" && method === "GET") return json(groups);
+    if (path === "/chats" && method === "POST") {
+      const ids = (body as { bot_ids: string[] }).bot_ids;
+      const created = {
+        id: "chat-g",
+        kind: "group",
+        title: "New group",
+        bot_ids: ids,
+        last_message_at: null,
+      };
+      groups.push(created);
+      return json(created);
+    }
+    if (path.startsWith("/library/") && method === "GET") {
+      const item = library.find((entry) => path.endsWith(entry.id));
+      return json({ ...item, download_url: `http://api.test/files/${item?.id}` });
+    }
+    if (path.startsWith("/library/") && method === "DELETE") {
+      library.splice(0, library.length);
+      return new Response(null, { status: 204 });
+    }
+    if (path.startsWith("/library")) {
+      const query = new URLSearchParams(path.split("?")[1] ?? "");
+      const q = (query.get("q") ?? "").toLowerCase();
+      const category = query.get("category");
+      return json(
+        library.filter(
+          (item) =>
+            item.title.toLowerCase().includes(q) && (!category || item.category === category),
+        ),
+      );
+    }
     if (path === "/vault" && method === "GET") return json(vault);
     if (path === "/vault" && method === "POST") {
       const input = body as { name: string; type: string };
@@ -1303,4 +1361,144 @@ test("the Apps tab ticks which connected apps a Bot may use", async () => {
 
   fireEvent.click(within(details).getByRole("button", { name: /Connect more apps/ }));
   expect(await screen.findByRole("region", { name: "Settings" })).toBeInTheDocument();
+});
+
+// --- Group chats ------------------------------------------------------------------------
+
+const RESEARCH = {
+  ...BOT,
+  id: "bot-2",
+  name: "Research Bot",
+  avatar: "🔎",
+  is_primary: false,
+  direct_chat_id: "chat-2",
+};
+
+test("a new group chat is created from the + menu and opens", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const calls = fakeApi({ bots: [BOT, RESEARCH] });
+  render(<App />);
+  await screen.findByRole("log");
+  fireEvent.click(screen.getByRole("button", { name: "New" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "New group chat" }));
+  const dialog = await screen.findByRole("dialog");
+  const create = within(dialog).getByRole("button", { name: "Create group" });
+  fireEvent.click(within(dialog).getByLabelText(/Inbox Bot/));
+  expect(create).toBeDisabled(); // a group needs at least two Bots
+  fireEvent.click(within(dialog).getByLabelText(/Research Bot/));
+  fireEvent.click(create);
+
+  expect(await screen.findByRole("heading", { name: "New group" })).toBeInTheDocument();
+  expect(calls.find((call) => call.path === "/chats" && call.method === "POST")?.body).toEqual({
+    bot_ids: ["bot-1", "bot-2"],
+  });
+  expect(
+    within(screen.getByRole("list", { name: "Groups" })).getByText("New group"),
+  ).toBeInTheDocument();
+});
+
+test("a group shows who said what, and @ picks a Bot to mention", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const said = {
+    ...message("m-r", "bot", "Tauri is a toolkit."),
+    chat_id: "chat-g",
+    bot_id: "bot-2",
+  };
+  const calls = fakeApi({
+    bots: [BOT, RESEARCH],
+    groups: [{ id: "chat-g", title: "Inbox Bot, Research Bot", bot_ids: ["bot-1", "bot-2"] }],
+    messages: [said],
+  });
+  render(<App />);
+  await screen.findByRole("log");
+  fireEvent.click(await screen.findByRole("button", { name: /Inbox Bot, Research Bot/ }));
+
+  const log = await screen.findByRole("log", { name: "Inbox Bot, Research Bot" });
+  expect(await within(log).findByText("Research Bot")).toBeInTheDocument(); // the speaker
+  expect(screen.queryByRole("button", { name: "Toggle details" })).not.toBeInTheDocument();
+
+  const box = screen.getByLabelText("Message Inbox Bot, Research Bot");
+  fireEvent.change(box, { target: { value: "hey @res" } });
+  const picker = await screen.findByRole("listbox", { name: "Bots" });
+  expect(within(picker).getAllByRole("option")).toHaveLength(1);
+  fireEvent.keyDown(box, { key: "Enter" }); // picks the Bot, does not send
+  expect(box).toHaveValue("hey @Research Bot ");
+  fireEvent.change(box, { target: { value: "hey @Research Bot what is Tauri?" } });
+  fireEvent.keyDown(box, { key: "Enter" });
+  await waitFor(() =>
+    expect(
+      calls.find((call) => call.method === "POST" && call.path.includes("/messages")),
+    ).toMatchObject({
+      path: "/chats/chat-g/messages",
+      body: { content: "hey @Research Bot what is Tauri?", skill_id: null },
+    }),
+  );
+});
+
+// --- Library ----------------------------------------------------------------------------
+
+test("the Library lists files, filters, previews markdown and saves to the computer", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  mocked.saveFile.mockResolvedValue(true);
+  const image = {
+    ...LIBRARY_ITEM,
+    id: "lib-2",
+    title: "Logo",
+    category: "image",
+    mime: "image/png",
+  };
+  fakeApi({ bots: [BOT], library: [LIBRARY_ITEM, image] });
+  render(<App />);
+  await screen.findByRole("log");
+  fireEvent.click(screen.getByRole("button", { name: "Library" }));
+  const library = await screen.findByRole("region", { name: "Library" });
+  const list = within(library).getByRole("list", { name: "Library items" });
+  expect(await within(list).findByText("Q3 report")).toBeInTheDocument();
+  expect(within(list).getAllByText("Inbox Bot · 2.0 KB")).toHaveLength(2);
+
+  fireEvent.change(within(library).getByLabelText("Filter by type"), {
+    target: { value: "image" },
+  });
+  await waitFor(() => expect(within(list).queryByText("Q3 report")).not.toBeInTheDocument());
+  fireEvent.change(within(library).getByLabelText("Filter by type"), { target: { value: "" } });
+  fireEvent.change(within(library).getByLabelText("Search the Library"), {
+    target: { value: "q3" },
+  });
+  await waitFor(() => expect(within(list).queryByText("Logo")).not.toBeInTheDocument());
+
+  fireEvent.click(within(list).getByRole("button", { name: /Q3 report/ }));
+  const preview = await within(library).findByRole("complementary", { name: "Preview" });
+  expect(
+    await within(preview).findByRole("heading", { name: "Q3 report", level: 1 }),
+  ).toBeInTheDocument();
+  expect(within(preview).getByText("up").tagName).toBe("STRONG"); // rendered markdown
+
+  fireEvent.click(within(preview).getByRole("button", { name: "Save to computer" }));
+  expect(await within(preview).findByText("Saved to your computer.")).toBeInTheDocument();
+  expect(mocked.saveFile).toHaveBeenCalledWith("http://api.test/files/lib-1", "q3.md");
+});
+
+test("a file card in the chat opens that item in the Library", async () => {
+  mocked.authGetTokens.mockResolvedValue({ has_session: true });
+  const card = {
+    ...message("m-file", "system", "Q3 report"),
+    card: {
+      type: "file",
+      library_id: "lib-1",
+      title: "Q3 report",
+      mime: "text/markdown",
+      size_bytes: 2048,
+    },
+  };
+  fakeApi({ bots: [BOT], library: [LIBRARY_ITEM], messages: [card] });
+  render(<App />);
+  await screen.findByRole("log");
+
+  fireEvent.click(await screen.findByRole("button", { name: "Open Q3 report in the Library" }));
+
+  const library = await screen.findByRole("region", { name: "Library" });
+  const preview = await within(library).findByRole("complementary", { name: "Preview" });
+  expect(
+    await within(preview).findByRole("heading", { name: "Q3 report", level: 1 }),
+  ).toBeInTheDocument();
 });

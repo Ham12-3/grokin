@@ -11,6 +11,7 @@ fn main() {
             "app_version",
             "notify",
             "set_tray_badge",
+            "save_file",
         ]),
     ))
     .expect("failed to run tauri-build");

@@ -231,6 +231,10 @@ class RunComputer:
         self.page_url = ""
         self.page_text = ""
 
+    @property
+    def started(self) -> bool:
+        return self._handle is not None
+
     async def handle(self) -> ComputerHandle:
         if self._handle is None:
             async with self._session_factory() as session:

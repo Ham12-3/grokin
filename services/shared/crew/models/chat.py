@@ -93,6 +93,10 @@ class Run(Base, IdMixin, TimestampMixin):
     transcript: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, server_default=text("'[]'"))
     # The skill the user invoked with "/slug": its steps go into this run's prompt.
     skill_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("skills.id", ondelete="SET NULL"))
+    # Group chats: which Bot turn this is for one user message (1 to 6), and the Bots
+    # still to answer after this one, in order.
+    turn: Mapped[int] = mapped_column(Integer, server_default=text("0"))
+    queue: Mapped[list[uuid.UUID]] = mapped_column(ARRAY(Uuid), server_default=text("'{}'"))
     # Results of the current step's tool calls so far, kept while one of them waits for
     # approval, so a resumed run never repeats a tool that already ran.
     pending_results: Mapped[list[dict[str, Any]]] = mapped_column(
@@ -257,6 +261,23 @@ class Connector(Base, IdMixin, TimestampMixin):
         ForeignKey("vault_items.id", ondelete="SET NULL")
     )
     status: Mapped[str] = mapped_column(Text, server_default=text("'connected'"))
+
+
+class LibraryItem(Base, IdMixin, TimestampMixin):
+    """Something a Bot made for the user to keep: a copy lives in storage for download."""
+
+    __tablename__ = "library_items"
+    __table_args__ = (Index("ix_library_items_user", "user_id"),)
+
+    user_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    bot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("bots.id", ondelete="SET NULL"))
+    run_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("runs.id", ondelete="SET NULL"))
+    kind: Mapped[str] = mapped_column(Text)  # file | page | result
+    title: Mapped[str] = mapped_column(Text)
+    path: Mapped[str | None] = mapped_column(Text)  # /workspace/outputs/...
+    storage_key: Mapped[str | None] = mapped_column(Text)
+    mime: Mapped[str | None] = mapped_column(Text)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger)
 
 
 class Computer(Base, IdMixin, TimestampMixin):

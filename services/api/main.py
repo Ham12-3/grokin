@@ -21,6 +21,7 @@ from api.routers import (
     chats,
     computer,
     connectors,
+    library,
     routines,
     runs,
     skills,
@@ -37,6 +38,7 @@ from crew.connectors.mcp_client import open_http
 from crew.db import create_engine, create_session_factory
 from crew.errors import AppError
 from crew.health import get_health
+from crew.library.storage import create_storage
 from crew.logs import configure as configure_logging
 from crew.schemas.health import HealthResponse
 from crew.tools import default_registry
@@ -65,6 +67,7 @@ router.include_router(routines.router)
 router.include_router(webhooks.router)
 router.include_router(vault.router)
 router.include_router(connectors.router)
+router.include_router(library.router)
 router.include_router(ws.router)
 
 
@@ -111,6 +114,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.vault = None  # the Vault routes then answer 503 with a clear message
     app.state.connectors = create_backend(settings, app.state.session_factory, app.state.http)
     app.state.mcp_opener = open_http
+    app.state.storage = create_storage(settings)
     app.state.queue = await create_pool(RedisSettings.from_dsn(settings.redis_url))
     try:
         yield

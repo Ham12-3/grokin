@@ -3,6 +3,7 @@
 //! `capabilities/default.json`.
 
 mod auth;
+mod library;
 mod secrets;
 mod tray;
 
@@ -75,6 +76,7 @@ pub fn run() {
         )
         .plugin(tauri_plugin_store::Builder::new().build())
         .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(
             // Do not restore "hidden": the app hides to the tray on close.
@@ -135,6 +137,7 @@ pub fn run() {
             app_version,
             notify,
             set_tray_badge,
+            library::save_file,
         ])
         .run(tauri::generate_context!())
         .expect("error while running Crew");
@@ -143,7 +146,7 @@ pub fn run() {
 #[cfg(test)]
 mod tests {
     /// Commands declared in build.rs. Each needs an `allow-...` line in the capability.
-    const COMMANDS: [&str; 8] = [
+    const COMMANDS: [&str; 9] = [
         "auth_start_login",
         "auth_get_tokens",
         "auth_get_access_token",
@@ -152,6 +155,7 @@ mod tests {
         "app_version",
         "notify",
         "set_tray_badge",
+        "save_file",
     ];
 
     fn permissions() -> Vec<String> {
@@ -186,6 +190,7 @@ mod tests {
                 "core:default",
                 "deep-link:default",
                 "notification:default",
+                "dialog:allow-save",
                 "store:default",
                 "opener:default",
                 "window-state:default",

@@ -62,6 +62,7 @@ from crew.computer.local_provider import LocalProvider  # noqa: E402
 from crew.config import Settings, get_settings  # noqa: E402
 from crew.connectors.backend import FakeBackend  # noqa: E402
 from crew.connectors.mcp_client import open_http  # noqa: E402
+from crew.library.storage import LocalStorage  # noqa: E402
 from crew.tools import default_registry  # noqa: E402
 from crew.vault.crypto import MasterKeyWrapper  # noqa: E402
 
@@ -183,7 +184,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
             text(
                 "TRUNCATE users, refresh_tokens, audit_log, bots, chats, chat_members, "
                 "messages, runs, tool_calls, usage_daily, computers, approvals, connector_log, memories, "
-                "skills, routines, vault_items, connectors "
+                "skills, routines, vault_items, connectors, library_items "
                 "CASCADE"
             )
         )
@@ -204,6 +205,7 @@ async def ctx(services_ready: bool) -> AsyncIterator[Ctx]:
     app.state.vault = MasterKeyWrapper(TEST_VAULT_KEY)
     app.state.connectors = FakeBackend(session_factory)
     app.state.mcp_opener = open_http
+    app.state.storage = LocalStorage(str(Path(settings.workspaces_dir).parent / "library"))
     app.state.redis = redis
     app.state.http = http
     app.state.mailer = mailer

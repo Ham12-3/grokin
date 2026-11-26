@@ -103,4 +103,5 @@ class SendMessageRequest(BaseModel):
 
 class SendMessageResponse(BaseModel):
     message: MessageOut
-    run_id: uuid.UUID
+    # None in a group when nobody was mentioned: a Bot is being chosen.
+    run_id: uuid.UUID | None

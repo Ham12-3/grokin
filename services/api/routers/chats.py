@@ -3,7 +3,7 @@
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Response
 
 from api.deps import CurrentUser, QueueDep, RedisDep, SessionDep, SettingsDep
 from crew.chats import service
@@ -29,6 +29,12 @@ async def list_chats(user: CurrentUser, session: SessionDep) -> list[ChatOut]:
 @router.post("", response_model=ChatOut)
 async def open_chat(body: ChatCreate, user: CurrentUser, session: SessionDep) -> ChatOut:
     return await service.open_chat(session, user.id, body.bot_ids)
+
+
+@router.delete("/{chat_id}", status_code=204)
+async def delete_group(chat_id: uuid.UUID, user: CurrentUser, session: SessionDep) -> Response:
+    await service.delete_group(session, user.id, chat_id)
+    return Response(status_code=204)
 
 
 @router.get("/{chat_id}/messages", response_model=MessagePage)

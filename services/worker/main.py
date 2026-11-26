@@ -10,13 +10,15 @@ from arq.connections import RedisSettings
 from redis.asyncio import Redis
 
 from crew.agent.loop import run_agent as run_agent_impl
+from crew.chats import groups
 from crew.computer import create_provider
 from crew.computer.service import stop_idle_computers
 from crew.config import get_settings
 from crew.connectors import events as connector_events
 from crew.connectors.backend import create_backend
 from crew.db import create_engine, create_session_factory
-from crew.llm import LLMError, create_llm
+from crew.library.storage import create_storage
+from crew.llm import LLMError, create_llm, create_small_llm
 from crew.logs import configure as configure_logging
 from crew.memory.service import compact_memory as compact_memory_impl
 from crew.routines import service as routines
@@ -36,6 +38,7 @@ async def startup(ctx: dict[str, Any]) -> None:
     ctx["registry"] = default_registry()
     ctx["provider"] = create_provider(settings)
     configure_logging(settings.log_level)
+    ctx["storage"] = create_storage(settings)
     ctx["connectors"] = create_backend(settings, ctx["session_factory"], ctx["http"])
     try:
         ctx["vault"] = create_wrapper(settings)
@@ -44,11 +47,13 @@ async def startup(ctx: dict[str, Any]) -> None:
         ctx["vault"] = None
     try:
         ctx["llm"] = create_llm(settings)
+        ctx["small_llm"] = create_small_llm(settings)
         ctx["llm_error"] = None
     except LLMError as error:
         # Keep the worker up: each run then fails with a clear message in the chat.
         log.warning("worker.llm_not_configured", code=error.code)
         ctx["llm"] = None
+        ctx["small_llm"] = None
         ctx["llm_error"] = error
 
 
@@ -73,6 +78,20 @@ async def run_agent(ctx: dict[str, Any], run_id: str) -> str:
         queue=ctx["redis"],  # ARQ's own pool: it can enqueue jobs
         vault=ctx["vault"],
         connectors=ctx["connectors"],
+        storage=ctx["storage"],
+    )
+
+
+async def pick_responder(ctx: dict[str, Any], chat_id: str, message_id: str) -> str:
+    """A group message that names nobody: decides which Bot answers, or none."""
+    return await groups.pick_responder(
+        ctx["session_factory"],
+        ctx["pubsub_redis"],
+        ctx["redis"],
+        ctx["settings"],
+        ctx["small_llm"],
+        uuid.UUID(chat_id),
+        uuid.UUID(message_id),
     )
 
 
@@ -112,7 +131,7 @@ async def cleanup_routine_runs(ctx: dict[str, Any]) -> int:
 
 
 class WorkerSettings:
-    functions: ClassVar[list[Any]] = [run_agent, compact_memory]
+    functions: ClassVar[list[Any]] = [run_agent, compact_memory, pick_responder]
     cron_jobs: ClassVar[list[Any]] = [
         cron(stop_idle, second=0),
         cron(fire_routines, second=5),

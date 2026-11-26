@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from crew import events
 from crew.bots.service import load_bot
+from crew.chats import groups
 from crew.config import Settings
 from crew.errors import AppError
 from crew.models import Chat, ChatMember, Message, Run, Skill, ToolCall
@@ -88,22 +89,38 @@ async def list_chats(session: AsyncSession, user_id: uuid.UUID) -> list[ChatOut]
 
 
 async def open_chat(session: AsyncSession, user_id: uuid.UUID, bot_ids: list[uuid.UUID]) -> ChatOut:
-    """One Bot: returns its direct chat. Group chats arrive in phase 9."""
-    if len(set(bot_ids)) != 1:
-        raise AppError(400, "groups_not_available", "Group chats are not available yet.")
-    bot = await load_bot(session, user_id, bot_ids[0])
-    chat = await session.scalar(
+    """One Bot: returns its direct chat. Two to six Bots: creates a group chat."""
+    unique = list(dict.fromkeys(bot_ids))
+    bots = [await load_bot(session, user_id, bot_id) for bot_id in unique]
+    if len(bots) > 1:
+        chat = Chat(user_id=user_id, kind="group", title=", ".join(bot.name for bot in bots)[:120])
+        session.add(chat)
+        await session.flush()
+        session.add_all(ChatMember(chat_id=chat.id, bot_id=bot.id) for bot in bots)
+        await session.commit()
+        return _chat_out(chat, [bot.id for bot in bots])
+    bot = bots[0]
+    direct = await session.scalar(
         select(Chat)
         .join(ChatMember, ChatMember.chat_id == Chat.id)
         .where(Chat.user_id == user_id, Chat.kind == "direct", ChatMember.bot_id == bot.id)
     )
-    if chat is None:
-        chat = Chat(user_id=user_id, kind="direct")
-        session.add(chat)
+    if direct is None:
+        direct = Chat(user_id=user_id, kind="direct")
+        session.add(direct)
         await session.flush()
-        session.add(ChatMember(chat_id=chat.id, bot_id=bot.id))
+        session.add(ChatMember(chat_id=direct.id, bot_id=bot.id))
         await session.commit()
-    return _chat_out(chat, [bot.id])
+    return _chat_out(direct, [bot.id])
+
+
+async def delete_group(session: AsyncSession, user_id: uuid.UUID, chat_id: uuid.UUID) -> None:
+    """Removes a group chat and its messages. A Bot's own chat cannot be deleted this way."""
+    chat = await load_chat(session, user_id, chat_id)
+    if chat.kind != "group":
+        raise AppError(400, "not_a_group", "Only group chats can be deleted.")
+    await session.delete(chat)
+    await session.commit()
 
 
 async def list_messages(
@@ -129,6 +146,39 @@ async def list_messages(
     )
 
 
+async def _send_to_group(
+    session: AsyncSession, redis: Redis, queue: JobQueue, chat: Chat, content: str
+) -> tuple[Message, uuid.UUID | None]:
+    """A message in a group: the mentioned Bots answer in order, or a picker chooses one."""
+    bots = await groups.members(session, chat.id)
+    if not bots:
+        raise not_found()
+    message = Message(chat_id=chat.id, role="user", content=content)
+    session.add(message)
+    chat.last_message_at = datetime.now(UTC)
+    await session.commit()
+    await session.refresh(message)
+    await events.publish(
+        redis,
+        events.chat_channel(chat.id),
+        "message.created",
+        {
+            "chat_id": str(chat.id),
+            "message": MessageOut.model_validate(message).model_dump(mode="json"),
+        },
+    )
+    order = groups.mentioned(content, bots)
+    if not order:
+        # Nobody was named: the worker makes one cheap call to choose who answers.
+        await queue.enqueue_job("pick_responder", str(chat.id), str(message.id))
+        return message, None
+    run_id = await groups.start_turn(
+        session, redis, queue, chat, order[0], turn=1, waiting=order[1:], message=message
+    )
+    await session.refresh(message)
+    return message, run_id
+
+
 async def send_message(
     session: AsyncSession,
     redis: Redis,
@@ -140,7 +190,7 @@ async def send_message(
     content: str,
     skill_id: uuid.UUID | None = None,
     card: dict[str, Any] | None = None,
-) -> tuple[Message, uuid.UUID]:
+) -> tuple[Message, uuid.UUID | None]:
     """Saves the user's message, creates a queued run and hands it to the worker."""
     chat = await session.scalar(
         select(Chat).where(Chat.id == chat_id, Chat.user_id == user_id).with_for_update()
@@ -149,6 +199,8 @@ async def send_message(
         raise not_found()
     if await active_run_id(session, settings, chat.id) is not None:
         raise AppError(409, "bot_busy", "Wait for the Bot to finish its reply.")
+    if chat.kind == "group":
+        return await _send_to_group(session, redis, queue, chat, content)
     bot_id = await session.scalar(
         select(ChatMember.bot_id).where(ChatMember.chat_id == chat.id).limit(1)
     )
